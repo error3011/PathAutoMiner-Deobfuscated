@@ -434,7 +434,24 @@ def minimize_spaces(code):
         result.append(tok)
     return ''.join(result)
 
+CONFIG_END_MARKER = "// ===== End of settings: don't edit below this line ====="
+
 def minify(source_code):
+    """Kept as-is: everything up to and including CONFIG_END_MARKER (the user-editable
+    settings block with its comments, as in the original script). Minified: the rest."""
+    if CONFIG_END_MARKER in source_code:
+        cut = source_code.index(CONFIG_END_MARKER) + len(CONFIG_END_MARKER)
+        header = source_code[:cut]
+        # drop build_pam's file-section banners from the kept header
+        header = "\n".join(l for l in header.split("\n") if not l.lstrip().startswith("// =========================="))
+        header = header.replace("\r\n", "\n").strip("\n")
+        # never rename names the settings block declares
+        header_names = set(re.findall(r'\bconst\s+\w+\s+([A-Za-z_]\w*)', header))
+        body, mapping = _minify_body(source_code[cut:], header_names)
+        return header + "\n" + body, mapping
+    return _minify_body(source_code, set())
+
+def _minify_body(source_code, extra_protected):
     """Main minification pipeline."""
     code = source_code
     
@@ -447,6 +464,7 @@ def minify(source_code):
     # Step 3: Find all identifiers
     all_idents = find_identifiers(code)
     protected = build_protected_set()
+    protected.update(extra_protected)
     
     # Filter to only user-defined identifiers: must be declared in the script and not protected
     declared = find_declared_identifiers(code)

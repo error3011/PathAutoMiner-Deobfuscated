@@ -68,11 +68,13 @@ for i, line in enumerate(code.split('\n'), 1):
     if len(line) > 100000:
         errors.append(f"LINE TOO LONG: line {i} has {len(line)} chars")
 
-# 6. Check Unicode identifier validity (outside string/char literals - text may contain anything)
+# 6. Check Unicode identifier validity (outside comments and string/char literals - text may contain anything)
 # C# allows: Lu, Ll, Lt, Lm, Lo, Nl categories for identifiers
 import unicodedata
 code_only = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', code)
 code_only = re.sub(r"'(?:[^'\\\n]|\\.)'", "' '", code_only)
+code_only = re.sub(r'/\*.*?\*/', ' ', code_only, flags=re.S)  # the kept settings header has comments
+code_only = re.sub(r'//[^\n]*', ' ', code_only)
 bad_chars = set()
 for c in code_only:
     if ord(c) > 127:

@@ -62,7 +62,16 @@ void ShipMainLoop(string argument)
                 referencePosition = GetLocalPosition(remoteControl, remoteControl.CenterOfMass);
             needPositionUpdate = false;
 
-            if (firstRun) { firstRun = false; StopAll(); }
+            if (firstRun)
+            {
+                firstRun = false;
+                // A job that was running when the world was saved (server restart/crash) is resumed
+                // instead of left paused. RETRY after an error also sets firstRun but not justLoaded.
+                bool wasRunning = jobState == JobState.Active;
+                StopAll();
+                if (justLoaded && resumeAfterRestart && wasRunning && setupErrorLevel <= 1) resumePending = true;
+            }
+            justLoaded = false;
             if (wasSetupError && setupErrorLevel == 0) statusMessage = "Setup complete";
         }
         else
@@ -131,6 +140,13 @@ void ShipMainLoop(string argument)
                 leftDirection = remoteControl.WorldMatrix.Left;
                 downDirection = remoteControl.WorldMatrix.Down;
                 UpdatePathRecording();
+
+                if (resumePending)
+                {
+                    resumePending = false;
+                    ContinueJob();
+                    if (currentNavState != NavState.Idle) statusMessage = "Job resumed after restart";
+                }
 
                 if (currentNavState != NavState.Idle)
                 {

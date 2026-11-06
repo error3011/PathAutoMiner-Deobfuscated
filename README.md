@@ -114,6 +114,7 @@ Behaviour follows the original script (`PAM_ORIGINAL.cs`). Fixes on top of it:
 - **Weight limit on long paths:** the zero-gravity waypoint used by the max-weight calculation is a separate field again (it had been merged with path-following's current waypoint, which affected paths over ~100 waypoints).
 - **Broadcasts:** every queued message is processed each run (one per run fell behind with ~10+ ships); non-text IGC messages on the PAM tag are ignored instead of crashing; `;` in ship names, status or menu text no longer shifts the fields the controller reads.
 - **Saves:** timer block names containing `;` or line breaks no longer corrupt the saved data. The save format is unchanged, so existing saves still load. `Save()` builds the data with a `StringBuilder`.
+- **Server restart / world load:** the dampeners are switched back on when the script starts. The port assumed they were already on, so a ship saved mid-flight (dampeners off) dropped as soon as its thrust overrides were cleared. A job that was running when the world was saved now resumes automatically. Set `resumeAfterRestart = false` in the settings block to stay paused like the original.
 - **Errors:** after an exception, run the PB with the argument `RETRY` to restart without recompiling.
 - **Controller arguments:** `SEND` / `SENDALL` without a target or command show usage instead of crashing.
 - Scan interval uses total elapsed seconds (was the 0-59 seconds component).
