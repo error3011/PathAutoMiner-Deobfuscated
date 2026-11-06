@@ -7,6 +7,7 @@ LocationType DetermineLocation()
 
     if (shipMode != ShipMode.Shuttle)
     {
+        LearnDocks(); // docked at a pool connector? then that's the current dock
         if (jobState != JobState.NoJob)
         {
             Vector3 localPos = TransformToLocal(miningForward, miningDown * -1, shipPosition - jobPosition.position);
@@ -149,6 +150,7 @@ void StopAll()
     returnToJobAfter = false;
     ClearBlocked();
     coopWaiting = false;
+    dockWaiting = false;
     damageCheckActive = false;
     simulateShipFull = false;
     undockRequested = false;

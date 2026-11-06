@@ -56,6 +56,7 @@ void ShipMainLoop(string argument)
             StartProfile();
             ScanBlocks3();
             ScanCameras();
+            if (setupErrorLevel <= 1) LearnDocks();
             EndProfile("Scan 3");
             lastScanTime = DateTime.Now;
 

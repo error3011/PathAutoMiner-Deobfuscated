@@ -29,7 +29,8 @@ void ScanCameras()
 bool IsFreeFlightState(NavState s)
 {
     return s == NavState.FlyToXY || s == NavState.FlyToJobArea || s == NavState.FlyToDockArea ||
-        s == NavState.FlyToPath || s == NavState.FlyToJobPos || s == NavState.FlyToDropPos || s == NavState.FlyToDropPos2;
+        s == NavState.FlyToPath || s == NavState.FlyToJobPos || s == NavState.FlyToDropPos || s == NavState.FlyToDropPos2 ||
+        (s == NavState.ApproachDock && poolDock != null); // straight leg from the path end to a pool connector
 }
 
 void ClearBlocked()

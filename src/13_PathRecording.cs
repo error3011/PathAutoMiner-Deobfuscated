@@ -97,7 +97,7 @@ void UpdatePathRecording()
 
 WaypointInfo GetCurrentDock()
 {
-    if (shipMode != ShipMode.Shuttle) return homeDock;
+    if (shipMode != ShipMode.Shuttle) return poolDock != null ? poolDock : homeDock; // dock pool
     return currentDockTarget;
 }
 

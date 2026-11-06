@@ -65,6 +65,9 @@ String BuildSaveData()
     // section 5 (co-op rows) was added after 1.3.1; older saves simply don't have it
     AppendStorage(";", false);
     AppendStorage(doneRows + "|" + myRow, false);
+    // section 6 (dock pool)
+    AppendStorage(";", false);
+    AppendStorage(DockPoolToString(), false);
     String data = saveBuffer.ToString();
     saveBuffer.Clear();
     return data;
@@ -166,6 +169,7 @@ DataResult RestoreFrom(String data)
         lines = SafeElement(sections, 5).Split('|');
         doneRows = SafeElement(lines, 0);
         if (!int.TryParse(SafeElement(lines, 1), out myRow)) myRow = -1;
+        DockPoolFromString(SafeElement(sections, 6));
     }
     catch { return DataResult.Failed; }
 

@@ -253,6 +253,8 @@ void UpdateNavigation()
         {
             if (currentNavState == NavState.FlyToDockArea || shipMode == ShipMode.Shuttle)
             {
+                // dock pool: own home dock if free, else a free pool connector, else wait at the path end
+                if (shipMode != ShipMode.Shuttle) { poolDock = null; poolDockId = 0; dockWaiting = !ChooseDock(1); }
                 WaypointInfo dock = GetCurrentDock();
                 pathFollowData = new PathFollowData();
                 pathFollowData.target = dock;
@@ -307,6 +309,13 @@ void UpdateNavigation()
             currentPathWaypoint = null;
         }
 
+        if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick)
+        {
+            WaypointInfo before = GetCurrentDock();
+            dockWaiting = !ChooseDock(1);
+            if (GetCurrentDock() != before) { SetNavState(NavState.FlyToDockArea); return; }
+        }
+
         CalculatePathSpeeds(waypoints, pathDirection, pathFollowData.targetPositions, pathFollowData.directFlyDist, stateFirstTick, ref stuckCounter);
 
         for (int i = 0; i < pathFollowData.targetPositions.Count; i++)
@@ -353,6 +362,8 @@ void UpdateNavigation()
         if (reachedEnd)
         {
             waypointsRemaining = 0;
+            if (currentNavState == NavState.FlyToDockArea && dockWaiting)
+            { SetFlightTarget(navTargetPos, 0); statusMessage = "Waiting for a free dock"; return; }
             if (currentNavState == NavState.FlyToDockArea || shipMode == ShipMode.Shuttle) { SetNavState(NavState.ApproachDock); return; }
             if (currentNavState == NavState.FlyToJobArea && returnToJobAfter) { SetNavState(NavState.FlyToJobPos); return; }
             if (currentNavState == NavState.FlyToJobArea) { SetNavState(NavState.FlyToXY); return; }
@@ -362,6 +373,12 @@ void UpdateNavigation()
     // [ApproachDock / RetryDocking] -> approach connector
     if (currentNavState == NavState.ApproachDock || currentNavState == NavState.RetryDocking)
     {
+        if (shipMode != ShipMode.Shuttle)
+        {
+            // dock pool: a ship already docking/docked there has priority -> back to the path end
+            WaypointInfo before = GetCurrentDock();
+            if (!ChooseDock(2) || GetCurrentDock() != before) { SetNavState(NavState.FlyToDockArea); return; }
+        }
         WaypointInfo dock = GetCurrentDock();
         if (stateFirstTick)
         {
@@ -581,7 +598,8 @@ void UpdateNavigation()
             SetLandingGears(landingGears, false);
 
             WaypointInfo dock = null;
-            if (Vector3.Distance(connected.GetPosition(), homeDock.position) < 5f && homeDock.isSet) dock = homeDock;
+            WaypointInfo home = shipMode == ShipMode.Shuttle ? homeDock : GetCurrentDock(); // dock pool
+            if (Vector3.Distance(connected.GetPosition(), home.position) < 5f && homeDock.isSet) dock = home;
             if (Vector3.Distance(connected.GetPosition(), jobPosition.position) < 5f && jobPosition.isSet) dock = jobPosition;
 
             if (dock != null)

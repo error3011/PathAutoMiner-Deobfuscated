@@ -22,6 +22,7 @@ const string DATAREV = "14";
 const String pamTag = "[PAM]";
 const String controllerTag = "[PAM-Controller]";
 const String dataTag = "[PAM-Data]"; //EXPORT/IMPORT use the Custom Data of the block with this tag
+const String dockPoolTag = "[PAM-Dock]"; //base connectors in the dock pool (used when the ship's own home dock is taken)
 //Tag for LCD's of cockpits and other blocks: [PAM:<lcdIndex>] e.g: [PAM:1]
 
 const int gyroSpeedSmall = 15; //[RPM] small ship
@@ -764,6 +765,7 @@ void ShipMainLoop(string argument)
             StartProfile();
             ScanBlocks3();
             ScanCameras();
+            if (setupErrorLevel <= 1) LearnDocks();
             EndProfile("Scan 3");
             lastScanTime = DateTime.Now;
 
@@ -1755,7 +1757,7 @@ void UpdatePathRecording()
 
 WaypointInfo GetCurrentDock()
 {
-    if (shipMode != ShipMode.Shuttle) return homeDock;
+    if (shipMode != ShipMode.Shuttle) return poolDock != null ? poolDock : homeDock; // dock pool
     return currentDockTarget;
 }
 
@@ -1816,6 +1818,7 @@ LocationType DetermineLocation()
 
     if (shipMode != ShipMode.Shuttle)
     {
+        LearnDocks(); // docked at a pool connector? then that's the current dock
         if (jobState != JobState.NoJob)
         {
             Vector3 localPos = TransformToLocal(miningForward, miningDown * -1, shipPosition - jobPosition.position);
@@ -1958,6 +1961,7 @@ void StopAll()
     returnToJobAfter = false;
     ClearBlocked();
     coopWaiting = false;
+    dockWaiting = false;
     damageCheckActive = false;
     simulateShipFull = false;
     undockRequested = false;
@@ -2374,6 +2378,8 @@ void UpdateNavigation()
         {
             if (currentNavState == NavState.FlyToDockArea || shipMode == ShipMode.Shuttle)
             {
+                // dock pool: own home dock if free, else a free pool connector, else wait at the path end
+                if (shipMode != ShipMode.Shuttle) { poolDock = null; poolDockId = 0; dockWaiting = !ChooseDock(1); }
                 WaypointInfo dock = GetCurrentDock();
                 pathFollowData = new PathFollowData();
                 pathFollowData.target = dock;
@@ -2428,6 +2434,13 @@ void UpdateNavigation()
             currentPathWaypoint = null;
         }
 
+        if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick)
+        {
+            WaypointInfo before = GetCurrentDock();
+            dockWaiting = !ChooseDock(1);
+            if (GetCurrentDock() != before) { SetNavState(NavState.FlyToDockArea); return; }
+        }
+
         CalculatePathSpeeds(waypoints, pathDirection, pathFollowData.targetPositions, pathFollowData.directFlyDist, stateFirstTick, ref stuckCounter);
 
         for (int i = 0; i < pathFollowData.targetPositions.Count; i++)
@@ -2474,6 +2487,8 @@ void UpdateNavigation()
         if (reachedEnd)
         {
             waypointsRemaining = 0;
+            if (currentNavState == NavState.FlyToDockArea && dockWaiting)
+            { SetFlightTarget(navTargetPos, 0); statusMessage = "Waiting for a free dock"; return; }
             if (currentNavState == NavState.FlyToDockArea || shipMode == ShipMode.Shuttle) { SetNavState(NavState.ApproachDock); return; }
             if (currentNavState == NavState.FlyToJobArea && returnToJobAfter) { SetNavState(NavState.FlyToJobPos); return; }
             if (currentNavState == NavState.FlyToJobArea) { SetNavState(NavState.FlyToXY); return; }
@@ -2483,6 +2498,12 @@ void UpdateNavigation()
     // [ApproachDock / RetryDocking] -> approach connector
     if (currentNavState == NavState.ApproachDock || currentNavState == NavState.RetryDocking)
     {
+        if (shipMode != ShipMode.Shuttle)
+        {
+            // dock pool: a ship already docking/docked there has priority -> back to the path end
+            WaypointInfo before = GetCurrentDock();
+            if (!ChooseDock(2) || GetCurrentDock() != before) { SetNavState(NavState.FlyToDockArea); return; }
+        }
         WaypointInfo dock = GetCurrentDock();
         if (stateFirstTick)
         {
@@ -2702,7 +2723,8 @@ void UpdateNavigation()
             SetLandingGears(landingGears, false);
 
             WaypointInfo dock = null;
-            if (Vector3.Distance(connected.GetPosition(), homeDock.position) < 5f && homeDock.isSet) dock = homeDock;
+            WaypointInfo home = shipMode == ShipMode.Shuttle ? homeDock : GetCurrentDock(); // dock pool
+            if (Vector3.Distance(connected.GetPosition(), home.position) < 5f && homeDock.isSet) dock = home;
             if (Vector3.Distance(connected.GetPosition(), jobPosition.position) < 5f && jobPosition.isSet) dock = jobPosition;
 
             if (dock != null)
@@ -4327,6 +4349,9 @@ String BuildSaveData()
     // section 5 (co-op rows) was added after 1.3.1; older saves simply don't have it
     AppendStorage(";", false);
     AppendStorage(doneRows + "|" + myRow, false);
+    // section 6 (dock pool)
+    AppendStorage(";", false);
+    AppendStorage(DockPoolToString(), false);
     String data = saveBuffer.ToString();
     saveBuffer.Clear();
     return data;
@@ -4428,6 +4453,7 @@ DataResult RestoreFrom(String data)
         lines = SafeElement(sections, 5).Split('|');
         doneRows = SafeElement(lines, 0);
         if (!int.TryParse(SafeElement(lines, 1), out myRow)) myRow = -1;
+        DockPoolFromString(SafeElement(sections, 6));
     }
     catch { return DataResult.Failed; }
 
@@ -5401,7 +5427,8 @@ void ScanCameras()
 bool IsFreeFlightState(NavState s)
 {
     return s == NavState.FlyToXY || s == NavState.FlyToJobArea || s == NavState.FlyToDockArea ||
-        s == NavState.FlyToPath || s == NavState.FlyToJobPos || s == NavState.FlyToDropPos || s == NavState.FlyToDropPos2;
+        s == NavState.FlyToPath || s == NavState.FlyToJobPos || s == NavState.FlyToDropPos || s == NavState.FlyToDropPos2 ||
+        (s == NavState.ApproachDock && poolDock != null); // straight leg from the path end to a pool connector
 }
 
 void ClearBlocked()
@@ -5476,6 +5503,8 @@ class TrafficShip
     public float diameter;
     public String job = "";
     public int row = -1;
+    public long dock = 0;  // dock pool: connector this ship uses or heads for
+    public int dockPhase = 0;
     public DateTime time;
 }
 
@@ -5516,7 +5545,7 @@ void UpdateTraffic()
     bool inJob = currentNavState == NavState.FlyToXY || currentNavState == NavState.Mining || currentNavState == NavState.Returning;
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
-        (inJob ? myRow : -1) + ";" + doneRows);
+        (inJob ? myRow : -1) + ";" + doneRows + ";" + ClaimedDockId() + "," + DockPhase());
 }
 
 void ParseTraffic(String data)
@@ -5537,6 +5566,13 @@ void ParseTraffic(String data)
         ship.row = int.Parse(f[5]);
         ship.time = DateTime.Now;
         if (ship.job != "" && ship.job == JobKey()) MergeDoneRows(f[6]);
+        ship.dock = 0; ship.dockPhase = 0;
+        if (f.Length >= 8)
+        {
+            String[] d = f[7].Split(',');
+            ship.dock = long.Parse(d[0]);
+            ship.dockPhase = int.Parse(d[1]);
+        }
     }
     catch { } // malformed message from another script: ignore
 }
@@ -5670,4 +5706,158 @@ int ClaimHole(int idx)
         return r == row ? idx : r * jobWidth;
     }
     return anyLeft ? -1 : jobWidth * jobHeight;
+}
+
+// ========================== 31_DockPool.cs ==========================
+// ========================== DOCK POOL ==========================
+// Miners/grinders only (shuttles keep their two docks). A ship still has its own recorded home
+// dock and uses it whenever it's free, so nothing changes without tagged connectors. Base
+// connectors named with dockPoolTag form a pool: when the home dock is taken by another PAM ship
+// (e.g. several ships sharing one recorded path via IMPORT), the ship docks at a free pool
+// connector instead, or waits at the end of the path until one is free.
+// How: while docked, the ship stores its pose relative to the base connector it is locked to
+// (same for every connector of that type) and the positions of all pool connectors. Claims
+// travel in the traffic messages: docked > final approach > on the way; ties go to the lower id.
+
+class PoolDock
+{
+    public long id;
+    public Vector3 pos, fwd, up;
+}
+
+List<PoolDock> dockPool = new List<PoolDock>();
+bool dockRelSet = false;
+Vector3 dockRelFwd, dockRelDown, dockRelLeft, dockRelOffset;
+long homeConnId = 0;          // base connector of the recorded home dock (0 = not seen yet)
+long poolDockId = 0;          // pool connector in use (0 = own home dock)
+WaypointInfo poolDock = null; // ship pose at that connector (null = own home dock)
+bool dockWaiting = false;
+
+// Ship pose (as a dock waypoint) when locked to a base connector with this position/orientation.
+WaypointInfo DockPose(Vector3 pos, Vector3 fwd, Vector3 up)
+{
+    MatrixD m = MatrixD.CreateWorld(pos, fwd, up);
+    WaypointInfo w = new WaypointInfo(homeDock); // keeps this ship's connector and the gravity
+    w.forwardDir = Vector3D.TransformNormal(dockRelFwd, m);
+    w.downDir = Vector3D.TransformNormal(dockRelDown, m);
+    w.leftDir = Vector3D.TransformNormal(dockRelLeft, m);
+    w.position = pos + (Vector3)Vector3D.TransformNormal(dockRelOffset, m);
+    w.isSet = true;
+    return w;
+}
+
+int DockPhase()
+{
+    NavState s = currentNavState;
+    if (s == NavState.Docking || s == NavState.Unloading || s == NavState.Charging || s == NavState.WaitUranium ||
+        s == NavState.FillHydrogen || s == NavState.Undocking) return 3;
+    if (s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.RetryDocking) return 2;
+    if (s == NavState.FlyToDockArea) return 1;
+    return 0;
+}
+
+long ClaimedDockId() { return DockPhase() == 0 ? 0 : (poolDock != null ? poolDockId : homeConnId); }
+
+// While docked: learn the pose relative to the base connector and the list of pool connectors.
+void LearnDocks()
+{
+    if (shipMode == ShipMode.Shuttle || !homeDock.isSet) return;
+    IMyShipConnector conn = FindConnector(MyShipConnectorStatus.Connected);
+    if (conn == null || conn.OtherConnector == null) return;
+    IMyShipConnector other = conn.OtherConnector;
+    Vector3I homeConn = new Vector3I((int)homeDock.connectorGridPos.X, (int)homeDock.connectorGridPos.Y, (int)homeDock.connectorGridPos.Z);
+    if (conn.Position == homeConn)
+    {
+        MatrixD inv = MatrixD.Transpose(other.WorldMatrix); // rotation part only is used
+        dockRelFwd = Vector3D.TransformNormal(remoteControl.WorldMatrix.Forward, inv);
+        dockRelDown = Vector3D.TransformNormal(remoteControl.WorldMatrix.Down, inv);
+        dockRelLeft = Vector3D.TransformNormal(remoteControl.WorldMatrix.Left, inv);
+        dockRelOffset = Vector3D.TransformNormal(conn.GetPosition() - other.GetPosition(), inv);
+        dockRelSet = true;
+    }
+    if (Vector3.Distance(conn.GetPosition(), homeDock.position) < 5) homeConnId = other.EntityId;
+
+    List<IMyShipConnector> found = new List<IMyShipConnector>();
+    gridTerminalSystem.GetBlocksOfType(found, q => q.CustomName.Contains(dockPoolTag) && !q.CubeGrid.IsSameConstructAs(Me.CubeGrid));
+    if (found.Count > 0)
+    {
+        dockPool.Clear();
+        for (int i = 0; i < found.Count; i++)
+        {
+            PoolDock p = new PoolDock();
+            p.id = found[i].EntityId; p.pos = found[i].GetPosition(); p.fwd = found[i].WorldMatrix.Forward; p.up = found[i].WorldMatrix.Up;
+            dockPool.Add(p);
+        }
+    }
+    // which dock are we at?
+    poolDock = null; poolDockId = 0;
+    if (other.EntityId == homeConnId || !dockRelSet) return;
+    for (int i = 0; i < dockPool.Count; i++)
+        if (dockPool[i].id == other.EntityId) { poolDockId = dockPool[i].id; poolDock = DockPose(dockPool[i].pos, dockPool[i].fwd, dockPool[i].up); }
+}
+
+bool IsDockTaken(long id, int myPhase)
+{
+    if (id == 0) return false;
+    for (int i = 0; i < traffic.Count; i++)
+    {
+        TrafficShip t = traffic[i];
+        if (t.dock == id && (t.dockPhase > myPhase || (t.dockPhase == myPhase && t.id < myGridId))) return true;
+    }
+    return false;
+}
+
+// Picks the dock to use: the current one while it's ours, else own home, else the nearest free
+// pool connector. Returns false when every dock is taken (wait).
+bool ChooseDock(int phase)
+{
+    if (shipMode == ShipMode.Shuttle || !trafficEnabled) { poolDock = null; poolDockId = 0; return true; }
+    long current = poolDock != null ? poolDockId : homeConnId;
+    if (!IsDockTaken(current, phase)) return true;
+    if (!IsDockTaken(homeConnId, phase)) { poolDock = null; poolDockId = 0; return true; }
+    if (!dockRelSet) return false;
+    PoolDock best = null;
+    float bestDist = 0;
+    for (int i = 0; i < dockPool.Count; i++)
+    {
+        PoolDock p = dockPool[i];
+        if (p.id == homeConnId || IsDockTaken(p.id, phase)) continue;
+        float d = Vector3.Distance(p.pos, homeDock.position);
+        if (best == null || d < bestDist) { best = p; bestDist = d; }
+    }
+    if (best == null) return false;
+    poolDockId = best.id;
+    poolDock = DockPose(best.pos, best.fwd, best.up);
+    return true;
+}
+
+// Save section 6: dock pose relation, home connector id and the pool list.
+String DockPoolToString()
+{
+    String s = (dockRelSet ? "1" : "0") + ":" + VectorToString(dockRelFwd) + ":" + VectorToString(dockRelDown) + ":" +
+        VectorToString(dockRelLeft) + ":" + VectorToString(dockRelOffset) + ":" + homeConnId;
+    for (int i = 0; i < dockPool.Count; i++)
+        s += ":" + dockPool[i].id + "," + VectorToString(dockPool[i].pos) + "," + VectorToString(dockPool[i].fwd) + "," + VectorToString(dockPool[i].up);
+    return s;
+}
+
+void DockPoolFromString(String s)
+{
+    dockPool.Clear();
+    dockRelSet = false;
+    homeConnId = 0;
+    String[] f = s.Split(':');
+    if (f.Length < 6) return;
+    dockRelSet = f[0] == "1";
+    dockRelFwd = StringToVector(f[1]); dockRelDown = StringToVector(f[2]); dockRelLeft = StringToVector(f[3]); dockRelOffset = StringToVector(f[4]);
+    long.TryParse(f[5], out homeConnId);
+    for (int i = 6; i < f.Length; i++)
+    {
+        String[] e = f[i].Split(',');
+        if (e.Length < 4) continue;
+        PoolDock p = new PoolDock();
+        if (!long.TryParse(e[0], out p.id)) continue;
+        p.pos = StringToVector(e[1]); p.fwd = StringToVector(e[2]); p.up = StringToVector(e[3]);
+        dockPool.Add(p);
+    }
 }

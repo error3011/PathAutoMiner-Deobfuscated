@@ -19,6 +19,8 @@ class TrafficShip
     public float diameter;
     public String job = "";
     public int row = -1;
+    public long dock = 0;  // dock pool: connector this ship uses or heads for
+    public int dockPhase = 0;
     public DateTime time;
 }
 
@@ -59,7 +61,7 @@ void UpdateTraffic()
     bool inJob = currentNavState == NavState.FlyToXY || currentNavState == NavState.Mining || currentNavState == NavState.Returning;
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
-        (inJob ? myRow : -1) + ";" + doneRows);
+        (inJob ? myRow : -1) + ";" + doneRows + ";" + ClaimedDockId() + "," + DockPhase());
 }
 
 void ParseTraffic(String data)
@@ -80,6 +82,13 @@ void ParseTraffic(String data)
         ship.row = int.Parse(f[5]);
         ship.time = DateTime.Now;
         if (ship.job != "" && ship.job == JobKey()) MergeDoneRows(f[6]);
+        ship.dock = 0; ship.dockPhase = 0;
+        if (f.Length >= 8)
+        {
+            String[] d = f[7].Split(',');
+            ship.dock = long.Parse(d[0]);
+            ship.dockPhase = int.Parse(d[1]);
+        }
     }
     catch { } // malformed message from another script: ignore
 }
