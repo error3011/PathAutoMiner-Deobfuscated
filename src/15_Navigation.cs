@@ -75,6 +75,14 @@ void UpdateNavigation()
         {
             // co-op: take a row no other ship on this job is on (a single ship keeps the original order)
             int claimed = ClaimHole(currentHoleIndex);
+            if (claimed < 0)
+            {
+                if (!coopWaiting) { coopWaiting = true; coopWaitPos = shipPosition; }
+                SetFlightTarget(coopWaitPos, 0);
+                statusMessage = "Waiting for the controller";
+                return;
+            }
+            coopWaiting = false;
             if (claimed != currentHoleIndex) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
             SpiralResult result = SetHolePosition(currentHoleIndex);
             if (result == SpiralResult.AllDone)
@@ -97,7 +105,7 @@ void UpdateNavigation()
         else
         {
             // co-op: a ship with a lower id claimed this hole (or one next to it) at the same moment -> pick again
-            if (myHole >= 0 && HoleConflict(myHole, true)) { stuckCounter = 0; return; }
+            if (myHole >= 0 && (JobCoordinated() ? coordCell >= 0 && coordCell != myHole : HoleConflict(myHole, true))) { stuckCounter = 0; return; }
             if (distToTarget < wpReachedDist) { SetNavState(NavState.Mining); return; }
         }
     }

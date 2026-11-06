@@ -39,6 +39,8 @@ const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
 int trafficTick = 0;
 String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
 int myHole = -1;              // grid cell of the hole this ship works on
+bool coopWaiting = false;
+Vector3 coopWaitPos = new Vector3();
 
 String JobKey()
 {
@@ -60,6 +62,13 @@ void UpdateTraffic()
     }
     for (int i = traffic.Count - 1; i >= 0; i--)
         if ((DateTime.Now - traffic[i].time).TotalSeconds > TRAFFIC_TIMEOUT) traffic.RemoveAt(i);
+    if (coordListener == null) coordListener = IGC.RegisterBroadcastListener(JOB_TAG);
+    budget = 10;
+    while (coordListener.HasPendingMessage && budget-- > 0)
+    {
+        String data = coordListener.AcceptMessage().Data as String;
+        if (data != null) try { ParseJobState(data); } catch { }
+    }
 
     // idle ships send too while docked, so their connector counts as taken
     if (++trafficTick < 3) return; // ~2 messages per second
@@ -68,7 +77,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : 0));
+        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight);
 }
 
 void ParseTraffic(String data)
@@ -250,26 +259,36 @@ void EnsureHoleOrder()
     String key = jobWidth + "|" + jobHeight + "|" + (int)jobStartPos;
     if (key == holeOrderKey) return;
     holeOrderKey = key;
-    holeCells.Clear();
-    int n = jobWidth * jobHeight;
-    if (jobStartPos == StartPosition.TopLeft)
+    BuildHoleOrder(jobWidth, jobHeight, jobStartPos, holeCells);
+}
+
+void BuildHoleOrder(int w, int h, StartPosition start, List<int> cells)
+{
+    cells.Clear();
+    if (start == StartPosition.TopLeft)
     {
-        for (int k = 0; k < n; k++)
+        for (int k = 0; k < w * h; k++)
         {
-            int row = k / jobWidth;
-            holeCells.Add(row * jobWidth + (row % 2 == 0 ? k - row * jobWidth : jobWidth - 1 - (k - row * jobWidth)));
+            int row = k / w;
+            cells.Add(row * w + (row % 2 == 0 ? k - row * w : w - 1 - (k - row * w)));
         }
         return;
     }
-    int halfW = (int)Math.Ceiling(jobWidth / 2f), halfH = (int)Math.Ceiling(jobHeight / 2f);
-    int halfW2 = jobWidth / 2, halfH2 = jobHeight / 2;
-    int x = 0, y = 0, dx = 0, dy = -1, max = Math.Max(jobWidth, jobHeight);
+    int halfW = (int)Math.Ceiling(w / 2f), halfH = (int)Math.Ceiling(h / 2f);
+    int halfW2 = w / 2, halfH2 = h / 2;
+    int x = 0, y = 0, dx = 0, dy = -1, max = Math.Max(w, h);
     for (int i = 0; i < max * max; i++)
     {
-        if (-halfW < x && x <= halfW2 && -halfH < y && y <= halfH2) holeCells.Add((y - 1 + halfH) * jobWidth + (x - 1 + halfW));
+        if (-halfW < x && x <= halfW2 && -halfH < y && y <= halfH2) cells.Add((y - 1 + halfH) * w + (x - 1 + halfW));
         if (x == y || (x < 0 && x == -y) || (x > 0 && x == 1 - y)) { int t = dx; dx = -dy; dy = t; }
         x += dx; y += dy;
     }
+}
+
+// Two holes so close that ships drilling them would touch (or the same hole).
+bool HolesTouch(int a, int b, int w, float tw, float th, float fw, float fh)
+{
+    return a == b || (Math.Abs(a % w - b % w) * tw < fw + 0.5f && Math.Abs(a / w - b / w) * th < fh + 0.5f);
 }
 
 bool EnsureDoneHoles()
@@ -310,9 +329,7 @@ bool HoleConflict(int cell, bool keeping)
     {
         TrafficShip t = traffic[i];
         if (t.job != key || t.hole < 0 || (keeping && t.id > myGridId)) continue;
-        float dc = Math.Abs(cell % jobWidth - t.hole % jobWidth) * toolWidth;
-        float dr = Math.Abs(cell / jobWidth - t.hole / jobWidth) * toolHeight;
-        if (t.hole == cell || (dc < shipFootWidth + 0.5f && dr < shipFootHeight + 0.5f)) return true;
+        if (HolesTouch(cell, t.hole, jobWidth, toolWidth, toolHeight, shipFootWidth, shipFootHeight)) return true;
     }
     return false;
 }
@@ -329,6 +346,17 @@ int ClaimHole(int idx)
     // were mined in order
     if (EnsureDoneHoles()) for (int k = 0; k < idx && k < n; k++) SetHoleDone(holeCells[k], true);
     if (myHole >= 0 && (idx >= n || holeCells[idx] != myHole)) { SetHoleDone(myHole, true); myHole = -1; } // moved on: finished
+    if (JobCoordinated())
+    {
+        // the [PAM-Controller] assigns the holes
+        if (coordCell >= 0 && !IsHoleDone(coordCell)) { holeWanted = false; myHole = coordCell; return holeCells.IndexOf(coordCell); }
+        if (coordCell == -2) { holeWanted = false; myHole = -1; return n; } // nothing left for this ship
+        if (coordCell == -1 && myHole >= 0 && !IsHoleDone(myHole)) { holeWanted = false; return idx; } // controller doesn't know it yet: keep it
+        myHole = -1;
+        if (!holeWanted) { holeWanted = true; coordWaitSince = DateTime.Now; }
+        if ((DateTime.Now - coordWaitSince).TotalSeconds < 5) return -1; // wait for the answer
+    }
+    holeWanted = false;
     if (myHole >= 0 && !IsHoleDone(myHole) && !HoleConflict(myHole, true)) return idx;
     myHole = -1;
     for (int k = 0; k < n; k++)
@@ -339,6 +367,33 @@ int ClaimHole(int idx)
         return k;
     }
     return n;
+}
+
+// ---- job coordination by the [PAM-Controller] ----
+// When a controller hears this job it keeps the master record (finished holes, which ship has
+// which hole) and assigns the next hole when a ship asks (want flag in the traffic message). It
+// broadcasts "J;job;doneHoles;ship:cell,..." on JOB_TAG. Without a controller (or if it doesn't
+// answer within 5 s) the ships use the peer rules above.
+
+const String JOB_TAG = "[PAMJOB]";
+IMyBroadcastListener coordListener = null;
+DateTime coordTime = DateTime.MinValue;
+DateTime coordWaitSince = DateTime.Now;
+int coordCell = -1; // -1 none assigned (yet), -2 nothing left for this ship
+bool holeWanted = false;
+
+bool JobCoordinated() { return trafficEnabled && (DateTime.Now - coordTime).TotalSeconds < 3; }
+
+void ParseJobState(String data)
+{
+    String[] f = data.Split(';');
+    if (f.Length < 4 || f[0] != "J" || f[1] == "" || f[1] != JobKey()) return;
+    coordTime = DateTime.Now;
+    MergeDoneHoles(f[2]);
+    coordCell = -1;
+    String me = myGridId + ":";
+    String[] e = f[3].Split(',');
+    for (int i = 0; i < e.Length; i++) if (e[i].StartsWith(me)) coordCell = int.Parse(e[i].Substring(me.Length));
 }
 
 // hole index -> holeCol/holeRow, like GetNextHolePosition

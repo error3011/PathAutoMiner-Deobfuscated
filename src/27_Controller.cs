@@ -49,6 +49,7 @@ void ControllerMainLoop(string argument)
     }
 
     if (isTick) UpdateDockControl(); // station dock control (clearance for one ship at a time)
+    if (isTick) UpdateJobCoordination(); // co-op jobs: hand out holes
     UpdateControllerDisplays();
 }
 
@@ -110,8 +111,39 @@ ShipInfo FindShip(String id, String name)
     return null;
 }
 
+// last command sent from the menus: its result is shown only on the page it was sent from, for a while
+String cmdSent = "";
+ShipInfo cmdTarget = null;
+DateTime cmdTime = DateTime.MinValue;
+List<ShipInfo> cmdShips = new List<ShipInfo>();
+const float CMD_RESULT_TIME = 20f; //[s]
+
+bool ShowCmdResult(ShipInfo target, String cmd)
+{
+    return cmd == cmdSent && target == cmdTarget && (DateTime.Now - cmdTime).TotalSeconds < CMD_RESULT_TIME;
+}
+
+// one line per ship the last command went to: received / pending / no answer
+String GetCmdResultLines(ShipInfo target)
+{
+    if (cmdSent == "" || !ShowCmdResult(target, cmdSent)) return "";
+    String s = "";
+    int ok = 0, shown = 0;
+    for (int i = 0; i < cmdShips.Count; i++)
+    {
+        CommandState st = cmdShips[i].ProcessCommand(cmdSent, false, false, false);
+        if (st == CommandState.Received) ok++;
+        if (shown++ < 8) s += "  " + cmdShips[i].name + ": " + (st == CommandState.Received ? "received" : st == CommandState.Pending ? "pending..." : st == CommandState.NoAnswer ? "no answer!" : "-") + "\n";
+    }
+    if (shown > 8) s += "  +" + (shown - 8) + " more\n";
+    return "--------------------------------------------\n" + cmdSent + ": " + ok + "/" + cmdShips.Count + " received\n" + s;
+}
+
 void SendCommandToShip(ShipInfo ship, String cmd)
 {
+    cmdSent = cmd; cmdTarget = ship; cmdTime = DateTime.Now;
+    cmdShips.Clear();
+    if (ship == null) cmdShips.AddRange(connectedShips); else cmdShips.Add(ship);
     if (ship == null)
     {
         for (int i = 0; i < connectedShips.Count; i++)
@@ -246,7 +278,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
     String thinSeparator = "--------------------------------------------\n";
 
     if (selectedShip == null || currentMenu == MenuPage.Main || currentMenu == MenuPage.SendCommandAll)
-        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n" + GetDockAreaLine();
+        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n" + GetDockAreaLine() + GetJobLines();
     else text += GetShipStatusLine(selectedShip) + "\n";
     text += separator;
 
@@ -300,6 +332,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
         if (AddMenuItem(ref text, sel, idx++, applyAction, " [Full simulation] " + GetCommandStatusText(target, "FULL"))) { SendCommandToShip(target, "FULL"); }
         if (target != null && target.shipMode == ShipMode.Shuttle)
             if (AddMenuItem(ref text, sel, idx++, applyAction, " [Undock] " + GetCommandStatusText(target, "UNDOCK"))) { SendCommandToShip(target, "UNDOCK"); }
+        text += GetCmdResultLines(target);
     }
     else if (currentMenu == MenuPage.ShipList)
     {
@@ -494,6 +527,7 @@ CommandState GetCommandState(ShipInfo ship, bool clear, string cmd)
 
 String GetCommandStatusText(ShipInfo ship, String cmd)
 {
+    if (!ShowCmdResult(ship, cmd)) return ""; // sent from another page, to another ship, or long ago
     CommandState state = GetCommandState(ship, false, cmd);
     if (state == CommandState.Received) return "received!";
     if (state == CommandState.Pending) return "pending...";
