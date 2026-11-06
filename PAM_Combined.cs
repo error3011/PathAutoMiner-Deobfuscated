@@ -46,7 +46,7 @@ const float useJobDirectionDist = 0f; //same as dock
 
 //other distances
 const float wpReachedDist = 2f;//[m]
-const float drillRadius = 1.4f;//[m]
+const float drillRadius = 1.4f;//[m] grinders and modded drills; vanilla drills use their real cut radius (small 1.3, large 1.9, prototech 6)
 
 //grinding
 const float sensorRange = 2f;//fly slow when blocks found in this range
@@ -372,6 +372,7 @@ int setupErrorLevel = 0;
 float toolWidth = 0;
 float toolHeight = 0;
 float shipDiameter = 0;
+float shipFootWidth = 0, shipFootHeight = 0; // ship size across the drill face
 
 // Block references
 IMyRemoteControl remoteControl;
@@ -1499,7 +1500,7 @@ String BuildMenuScreen(bool applyAction)
         if (AddMenuItem(ref text, sel, idx++, applyAction, " Back")) NavigateToMenu(MenuPage.Main);
         text += thinSep;
         text += "Next scan: " + scanCountdown + "s\n";
-        text += "Ship size: " + Math.Round(toolWidth, 1) + "m " + Math.Round(toolHeight, 1) + "m " + Math.Round(shipDiameter, 1) + "m \n";
+        text += "Drill area: " + Math.Round(toolWidth, 1) + "x" + Math.Round(toolHeight, 1) + "m Ship: " + Math.Round(shipFootWidth, 1) + "x" + Math.Round(shipFootHeight, 1) + "m (" + Math.Round(shipDiameter, 1) + "m)\n";
         text += "Broadcast: " + (broadcastEnabled ? "Online - " + shipName : "Offline") + "\n";
         text += "Max Instructions: " + Math.Round(maxInstructionPercent * 100f, 1) + "% \n";
     }
@@ -1972,7 +1973,6 @@ void StopAll()
     SetSortersEnabled(true);
     returnToJobAfter = false;
     ClearBlocked();
-    coopWaiting = false;
     dockWaiting = false;
     ReleaseDock();
     damageCheckActive = false;
@@ -2213,14 +2213,6 @@ void UpdateNavigation()
         {
             // co-op: take a row no other ship on this job is on (a single ship keeps the original order)
             int claimed = ClaimHole(currentHoleIndex);
-            if (claimed < 0)
-            {
-                if (!coopWaiting) { coopWaiting = true; coopWaitPos = shipPosition; }
-                SetFlightTarget(coopWaitPos, 0);
-                statusMessage = "Waiting for a free hole";
-                return;
-            }
-            coopWaiting = false;
             if (claimed != currentHoleIndex) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
             SpiralResult result = SetHolePosition(currentHoleIndex);
             if (result == SpiralResult.AllDone)
@@ -3997,6 +3989,7 @@ void CalculateToolDimensions()
     else if (workTools.Count > 0) referenceWorkTool = workTools[0];
 
     int count = 0;
+    float radius = 0;
     for (int i = 0; i < workTools.Count; i++)
     {
         if (workTools[i].WorldMatrix.Forward != referenceWorkTool.WorldMatrix.Forward)
@@ -4005,16 +3998,45 @@ void CalculateToolDimensions()
             continue;
         }
         count++;
+        radius = Math.Max(radius, ToolRadius(workTools[i]));
         Vector3 localPos = GetLocalPosition(remoteControl, workTools[i].GetPosition());
         if (i == 0) { minX = localPos.X; maxX = localPos.X; minY = localPos.Y; maxY = localPos.Y; minZ = localPos.Z; maxZ = localPos.Z; }
         maxX = Math.Max(localPos.X, maxX); minX = Math.Min(localPos.X, minX);
         maxY = Math.Max(localPos.Y, maxY); minY = Math.Min(localPos.Y, minY);
         maxZ = Math.Max(localPos.Z, maxZ); minZ = Math.Min(localPos.Z, minZ);
     }
-    toolWidth = (maxX - minX) * (1 - widthOverlap) + drillRadius * 2;
-    toolHeight = (maxY - minY) * (1 - heightOverlap) + drillRadius * 2;
-    if (referenceWorkTool != null && referenceWorkTool.WorldMatrix.Forward == remoteControl.WorldMatrix.Down)
-        toolHeight = (maxZ - minZ) * (1 - heightOverlap) + drillRadius * 2;
+    if (radius == 0) radius = drillRadius;
+    bool down = referenceWorkTool != null && referenceWorkTool.WorldMatrix.Forward == remoteControl.WorldMatrix.Down;
+    toolWidth = (maxX - minX) * (1 - widthOverlap) + radius * 2;
+    toolHeight = (down ? maxZ - minZ : maxY - minY) * (1 - heightOverlap) + radius * 2;
+
+    // ship footprint across the drill face (same axes as the hole grid): co-op skips a
+    // neighbouring hole only when the ship is wider than the area it drills
+    IMyCubeGrid g = remoteControl.CubeGrid;
+    float x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+    for (int c = 0; c < 8; c++)
+    {
+        Vector3 p = GetLocalPosition(remoteControl, g.GridIntegerToWorld(new Vector3I((c & 1) == 0 ? g.Min.X : g.Max.X,
+            (c & 2) == 0 ? g.Min.Y : g.Max.Y, (c & 4) == 0 ? g.Min.Z : g.Max.Z)));
+        float y = down ? p.Z : p.Y;
+        if (c == 0 || p.X < x0) x0 = p.X;
+        if (c == 0 || p.X > x1) x1 = p.X;
+        if (c == 0 || y < y0) y0 = y;
+        if (c == 0 || y > y1) y1 = y;
+    }
+    shipFootWidth = x1 - x0 + g.GridSize;
+    shipFootHeight = y1 - y0 + g.GridSize;
+}
+
+// cut radius of a drill (from the game's block definitions)
+float ToolRadius(IMyTerminalBlock b)
+{
+    if (!(b is IMyShipDrill)) return drillRadius;
+    String s = b.BlockDefinition.SubtypeId;
+    if (s == "SmallBlockDrill") return 1.3f;
+    if (s == "LargeBlockDrill") return 1.9f;
+    if (s == "LargeBlockPrototechDrill") return 6f;
+    return drillRadius;
 }
 
 List<T> FilterByTag<T>(List<T> list, String tag, bool inName)
@@ -5584,8 +5606,6 @@ const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
 int trafficTick = 0;
 String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
 int myHole = -1;              // grid cell of the hole this ship works on
-bool coopWaiting = false;
-Vector3 coopWaitPos = new Vector3();
 
 String JobKey()
 {
@@ -5783,9 +5803,10 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
 }
 
 // ---- co-op mining ----
-// Ships on the same job claim single holes. A claim is kept while the job runs (also while the
-// ship is away unloading), so a half-mined hole is never taken over. Holes too close to another
-// ship's hole (closer than the bigger ship's size) are skipped. Finished holes are shared.
+// Ships on the same job claim single holes, in the normal mining order. A claim is kept while the
+// job runs (also while the ship is away unloading), so a half-mined hole is never taken over.
+// A neighbouring hole is skipped only when the ship is wider than the area it drills (the two
+// ships would touch). Finished holes are shared.
 
 List<int> holeCells = new List<int>(); // mining order: grid cell (row * jobWidth + col) for each hole index
 String holeOrderKey = "";
@@ -5846,8 +5867,8 @@ void SetHoleDone(int cell, bool done)
     doneHoles = new String(h);
 }
 
-// Another ship on this job has this hole, or one too close to it. keeping: the hole is already
-// ours, so only a ship with a lower id makes us give it up (two ships claimed at the same moment).
+// Another ship on this job has this hole, or one so close that the ships would touch. keeping:
+// the hole is already ours, so only a ship with a lower id makes us give it up (both claimed at once).
 bool HoleConflict(int cell, bool keeping)
 {
     if (!trafficEnabled) return false;
@@ -5858,14 +5879,14 @@ bool HoleConflict(int cell, bool keeping)
         if (t.job != key || t.hole < 0 || (keeping && t.id > myGridId)) continue;
         float dc = Math.Abs(cell % jobWidth - t.hole % jobWidth) * toolWidth;
         float dr = Math.Abs(cell / jobWidth - t.hole / jobWidth) * toolHeight;
-        if (t.hole == cell || Math.Sqrt(dc * dc + dr * dr) < Math.Max(shipDiameter, t.diameter) * 1.1f) return true;
+        if (t.hole == cell || (dc < shipFootWidth + 0.5f && dr < shipFootHeight + 0.5f)) return true;
     }
     return false;
 }
 
-// Called before flying to hole idx (index in the mining order). Returns the hole index to mine,
-// -1 to wait (every hole left is taken or too close to another ship), or jobWidth * jobHeight
-// when every hole is finished. A single ship gets its holes in the original order.
+// Called before flying to hole idx (index in the mining order). Returns the next free hole index,
+// or jobWidth * jobHeight when every hole is finished or being mined by another ship (this ship's
+// part of the job is done). A single ship gets its holes in the original order.
 int ClaimHole(int idx)
 {
     int n = jobWidth * jobHeight;
@@ -5877,17 +5898,14 @@ int ClaimHole(int idx)
     if (myHole >= 0 && (idx >= n || holeCells[idx] != myHole)) { SetHoleDone(myHole, true); myHole = -1; } // moved on: finished
     if (myHole >= 0 && !IsHoleDone(myHole) && !HoleConflict(myHole, true)) return idx;
     myHole = -1;
-    bool anyLeft = false;
     for (int k = 0; k < n; k++)
     {
         int c = holeCells[k];
-        if (IsHoleDone(c)) continue;
-        anyLeft = true;
-        if (HoleConflict(c, false)) continue;
+        if (IsHoleDone(c) || HoleConflict(c, false)) continue;
         myHole = c;
         return k;
     }
-    return anyLeft ? -1 : n;
+    return n;
 }
 
 // hole index -> holeCol/holeRow, like GetNextHolePosition

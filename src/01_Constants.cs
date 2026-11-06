@@ -45,7 +45,7 @@ const float useJobDirectionDist = 0f; //same as dock
 
 //other distances
 const float wpReachedDist = 2f;//[m]
-const float drillRadius = 1.4f;//[m]
+const float drillRadius = 1.4f;//[m] grinders and modded drills; vanilla drills use their real cut radius (small 1.3, large 1.9, prototech 6)
 
 //grinding
 const float sensorRange = 2f;//fly slow when blocks found in this range

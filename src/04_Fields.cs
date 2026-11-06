@@ -36,6 +36,7 @@ int setupErrorLevel = 0;
 float toolWidth = 0;
 float toolHeight = 0;
 float shipDiameter = 0;
+float shipFootWidth = 0, shipFootHeight = 0; // ship size across the drill face
 
 // Block references
 IMyRemoteControl remoteControl;

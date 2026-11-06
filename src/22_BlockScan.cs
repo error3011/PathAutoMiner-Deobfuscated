@@ -143,6 +143,7 @@ void CalculateToolDimensions()
     else if (workTools.Count > 0) referenceWorkTool = workTools[0];
 
     int count = 0;
+    float radius = 0;
     for (int i = 0; i < workTools.Count; i++)
     {
         if (workTools[i].WorldMatrix.Forward != referenceWorkTool.WorldMatrix.Forward)
@@ -151,16 +152,45 @@ void CalculateToolDimensions()
             continue;
         }
         count++;
+        radius = Math.Max(radius, ToolRadius(workTools[i]));
         Vector3 localPos = GetLocalPosition(remoteControl, workTools[i].GetPosition());
         if (i == 0) { minX = localPos.X; maxX = localPos.X; minY = localPos.Y; maxY = localPos.Y; minZ = localPos.Z; maxZ = localPos.Z; }
         maxX = Math.Max(localPos.X, maxX); minX = Math.Min(localPos.X, minX);
         maxY = Math.Max(localPos.Y, maxY); minY = Math.Min(localPos.Y, minY);
         maxZ = Math.Max(localPos.Z, maxZ); minZ = Math.Min(localPos.Z, minZ);
     }
-    toolWidth = (maxX - minX) * (1 - widthOverlap) + drillRadius * 2;
-    toolHeight = (maxY - minY) * (1 - heightOverlap) + drillRadius * 2;
-    if (referenceWorkTool != null && referenceWorkTool.WorldMatrix.Forward == remoteControl.WorldMatrix.Down)
-        toolHeight = (maxZ - minZ) * (1 - heightOverlap) + drillRadius * 2;
+    if (radius == 0) radius = drillRadius;
+    bool down = referenceWorkTool != null && referenceWorkTool.WorldMatrix.Forward == remoteControl.WorldMatrix.Down;
+    toolWidth = (maxX - minX) * (1 - widthOverlap) + radius * 2;
+    toolHeight = (down ? maxZ - minZ : maxY - minY) * (1 - heightOverlap) + radius * 2;
+
+    // ship footprint across the drill face (same axes as the hole grid): co-op skips a
+    // neighbouring hole only when the ship is wider than the area it drills
+    IMyCubeGrid g = remoteControl.CubeGrid;
+    float x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+    for (int c = 0; c < 8; c++)
+    {
+        Vector3 p = GetLocalPosition(remoteControl, g.GridIntegerToWorld(new Vector3I((c & 1) == 0 ? g.Min.X : g.Max.X,
+            (c & 2) == 0 ? g.Min.Y : g.Max.Y, (c & 4) == 0 ? g.Min.Z : g.Max.Z)));
+        float y = down ? p.Z : p.Y;
+        if (c == 0 || p.X < x0) x0 = p.X;
+        if (c == 0 || p.X > x1) x1 = p.X;
+        if (c == 0 || y < y0) y0 = y;
+        if (c == 0 || y > y1) y1 = y;
+    }
+    shipFootWidth = x1 - x0 + g.GridSize;
+    shipFootHeight = y1 - y0 + g.GridSize;
+}
+
+// cut radius of a drill (from the game's block definitions)
+float ToolRadius(IMyTerminalBlock b)
+{
+    if (!(b is IMyShipDrill)) return drillRadius;
+    String s = b.BlockDefinition.SubtypeId;
+    if (s == "SmallBlockDrill") return 1.3f;
+    if (s == "LargeBlockDrill") return 1.9f;
+    if (s == "LargeBlockPrototechDrill") return 6f;
+    return drillRadius;
 }
 
 List<T> FilterByTag<T>(List<T> list, String tag, bool inName)

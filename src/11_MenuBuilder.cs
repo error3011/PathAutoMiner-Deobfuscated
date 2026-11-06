@@ -222,7 +222,7 @@ String BuildMenuScreen(bool applyAction)
         if (AddMenuItem(ref text, sel, idx++, applyAction, " Back")) NavigateToMenu(MenuPage.Main);
         text += thinSep;
         text += "Next scan: " + scanCountdown + "s\n";
-        text += "Ship size: " + Math.Round(toolWidth, 1) + "m " + Math.Round(toolHeight, 1) + "m " + Math.Round(shipDiameter, 1) + "m \n";
+        text += "Drill area: " + Math.Round(toolWidth, 1) + "x" + Math.Round(toolHeight, 1) + "m Ship: " + Math.Round(shipFootWidth, 1) + "x" + Math.Round(shipFootHeight, 1) + "m (" + Math.Round(shipDiameter, 1) + "m)\n";
         text += "Broadcast: " + (broadcastEnabled ? "Online - " + shipName : "Offline") + "\n";
         text += "Max Instructions: " + Math.Round(maxInstructionPercent * 100f, 1) + "% \n";
     }

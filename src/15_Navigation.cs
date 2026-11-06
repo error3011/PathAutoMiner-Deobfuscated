@@ -75,14 +75,6 @@ void UpdateNavigation()
         {
             // co-op: take a row no other ship on this job is on (a single ship keeps the original order)
             int claimed = ClaimHole(currentHoleIndex);
-            if (claimed < 0)
-            {
-                if (!coopWaiting) { coopWaiting = true; coopWaitPos = shipPosition; }
-                SetFlightTarget(coopWaitPos, 0);
-                statusMessage = "Waiting for a free hole";
-                return;
-            }
-            coopWaiting = false;
             if (claimed != currentHoleIndex) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
             SpiralResult result = SetHolePosition(currentHoleIndex);
             if (result == SpiralResult.AllDone)

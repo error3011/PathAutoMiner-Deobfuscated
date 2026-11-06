@@ -39,8 +39,6 @@ const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
 int trafficTick = 0;
 String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
 int myHole = -1;              // grid cell of the hole this ship works on
-bool coopWaiting = false;
-Vector3 coopWaitPos = new Vector3();
 
 String JobKey()
 {
@@ -238,9 +236,10 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
 }
 
 // ---- co-op mining ----
-// Ships on the same job claim single holes. A claim is kept while the job runs (also while the
-// ship is away unloading), so a half-mined hole is never taken over. Holes too close to another
-// ship's hole (closer than the bigger ship's size) are skipped. Finished holes are shared.
+// Ships on the same job claim single holes, in the normal mining order. A claim is kept while the
+// job runs (also while the ship is away unloading), so a half-mined hole is never taken over.
+// A neighbouring hole is skipped only when the ship is wider than the area it drills (the two
+// ships would touch). Finished holes are shared.
 
 List<int> holeCells = new List<int>(); // mining order: grid cell (row * jobWidth + col) for each hole index
 String holeOrderKey = "";
@@ -301,8 +300,8 @@ void SetHoleDone(int cell, bool done)
     doneHoles = new String(h);
 }
 
-// Another ship on this job has this hole, or one too close to it. keeping: the hole is already
-// ours, so only a ship with a lower id makes us give it up (two ships claimed at the same moment).
+// Another ship on this job has this hole, or one so close that the ships would touch. keeping:
+// the hole is already ours, so only a ship with a lower id makes us give it up (both claimed at once).
 bool HoleConflict(int cell, bool keeping)
 {
     if (!trafficEnabled) return false;
@@ -313,14 +312,14 @@ bool HoleConflict(int cell, bool keeping)
         if (t.job != key || t.hole < 0 || (keeping && t.id > myGridId)) continue;
         float dc = Math.Abs(cell % jobWidth - t.hole % jobWidth) * toolWidth;
         float dr = Math.Abs(cell / jobWidth - t.hole / jobWidth) * toolHeight;
-        if (t.hole == cell || Math.Sqrt(dc * dc + dr * dr) < Math.Max(shipDiameter, t.diameter) * 1.1f) return true;
+        if (t.hole == cell || (dc < shipFootWidth + 0.5f && dr < shipFootHeight + 0.5f)) return true;
     }
     return false;
 }
 
-// Called before flying to hole idx (index in the mining order). Returns the hole index to mine,
-// -1 to wait (every hole left is taken or too close to another ship), or jobWidth * jobHeight
-// when every hole is finished. A single ship gets its holes in the original order.
+// Called before flying to hole idx (index in the mining order). Returns the next free hole index,
+// or jobWidth * jobHeight when every hole is finished or being mined by another ship (this ship's
+// part of the job is done). A single ship gets its holes in the original order.
 int ClaimHole(int idx)
 {
     int n = jobWidth * jobHeight;
@@ -332,17 +331,14 @@ int ClaimHole(int idx)
     if (myHole >= 0 && (idx >= n || holeCells[idx] != myHole)) { SetHoleDone(myHole, true); myHole = -1; } // moved on: finished
     if (myHole >= 0 && !IsHoleDone(myHole) && !HoleConflict(myHole, true)) return idx;
     myHole = -1;
-    bool anyLeft = false;
     for (int k = 0; k < n; k++)
     {
         int c = holeCells[k];
-        if (IsHoleDone(c)) continue;
-        anyLeft = true;
-        if (HoleConflict(c, false)) continue;
+        if (IsHoleDone(c) || HoleConflict(c, false)) continue;
         myHole = c;
         return k;
     }
-    return anyLeft ? -1 : n;
+    return n;
 }
 
 // hole index -> holeCol/holeRow, like GetNextHolePosition

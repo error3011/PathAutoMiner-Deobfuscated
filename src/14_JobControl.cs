@@ -149,7 +149,6 @@ void StopAll()
     SetSortersEnabled(true);
     returnToJobAfter = false;
     ClearBlocked();
-    coopWaiting = false;
     dockWaiting = false;
     ReleaseDock();
     damageCheckActive = false;
