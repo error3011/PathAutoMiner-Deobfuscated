@@ -98,6 +98,7 @@ void UpdateJobConfig(bool force, bool resetProgress)
         jobWidth = configWidth;
         jobHeight = configHeight;
         holeRow = 0; holeCol = 0;
+        doneRows = ""; myRow = -1;
         maxMineDepth = 0; lastHoleIndex = 0;
         currentMineDepth = 0; currentHoleIndex = 0;
         UpdateProgress(true);
@@ -146,6 +147,8 @@ void StopAll()
     SetBlocksEnabled(connectors, true);
     SetSortersEnabled(true);
     returnToJobAfter = false;
+    ClearBlocked();
+    coopWaiting = false;
     damageCheckActive = false;
     simulateShipFull = false;
     undockRequested = false;

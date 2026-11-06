@@ -31,7 +31,7 @@ void ProcessShipArgument(string argument)
         case "FULL": { simulateShipFull = true; } break;
         case "RESET": { resetRequested = true; setupErrorLevel = 2; } break;
         case "EXPORT": { ExportData(); } break;
-        case "IMPORT": { ImportData(); } break;
+        case "IMPORT": { ImportData(arg1 == "JOB"); } break;
         default: unhandled = true; break;
     }
 
@@ -88,7 +88,7 @@ String GetHelpText()
         "[START] Start job\n" + "[STOP] Stop every process\n" + "[CONT] Continue last job\n" +
         "[JOBPOS] Move to job position\n" + "[HOMEPOS] Move to home position\n\n" +
         "[FULL] Simulate ship is full\n" + "[ALIGN] Align the ship to planet\n" + "[RESET] Reset all data\n" +
-        "[EXPORT] Save path+job to " + dataTag + "\n" + "[IMPORT] Load path+job from " + dataTag + "\n";
+        "[EXPORT] Save path+job to " + dataTag + "\n" + "[IMPORT] Load path+job from " + dataTag + "\n" + "[IMPORT JOB] Load only the job (co-op)\n";
 
     if (shipMode != ShipMode.Shuttle)
         text += "[SHUTTLE] Enable shuttle mode\n" + "[NEXT] Next hole\n" + "[PREV] Previous hole\n\n" +

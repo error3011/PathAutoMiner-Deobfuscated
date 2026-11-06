@@ -3,7 +3,10 @@
 Build script for PAM (Path Auto Miner).
 
 Concatenates numbered .cs files from src/ into a single PAM_Combined.cs,
-then optionally runs minify_pam.py to produce PAM_Minified.cs.
+then optionally runs minify_pam.py to produce:
+  PAM_Ship.cs        - paste into miner / grinder / shuttle PBs
+  PAM_Controller.cs  - paste into the [PAM-Controller] PB
+  PAM_Minified.cs    - both modes in one script (only while it fits in 100,000 chars)
 
 Usage:
     python tools/build_pam.py                 # concatenate only
@@ -23,6 +26,9 @@ SRC_DIR = os.path.join(ROOT_DIR, "src")
 COMBINED_OUTPUT = os.path.join(ROOT_DIR, "PAM_Combined.cs")
 MINIFIED_OUTPUT = os.path.join(ROOT_DIR, "PAM_Minified.cs")
 MINIFY_SCRIPT = os.path.join(SCRIPT_DIR, "minify_pam.py")
+VARIANT_OUTPUTS = {"ship": os.path.join(ROOT_DIR, "PAM_Ship.cs"),
+                   "controller": os.path.join(ROOT_DIR, "PAM_Controller.cs")}
+SE_CHAR_LIMIT = 100000
 
 
 def collect_source_files():
@@ -66,6 +72,26 @@ def minify(input_path, output_path, extra_args):
     return result.returncode
 
 
+def build_variants(combined_path):
+    """Write the minified ship-only and controller-only scripts."""
+    sys.path.insert(0, SCRIPT_DIR)
+    import strip_unused
+    import minify_pam
+    source = open(combined_path, encoding="utf-8").read()
+    ok = True
+    for variant, out_path in VARIANT_OUTPUTS.items():
+        code, report = strip_unused.make_variant(source, variant)
+        minified, _ = minify_pam.minify(code)
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(minified)
+        size = len(minified)
+        status = "OK" if size <= SE_CHAR_LIMIT else "TOO LONG"
+        print(f"Variant:   {variant:10s} -> {os.path.basename(out_path)}: {size} chars, "
+              f"{SE_CHAR_LIMIT - size} free [{status}] ({len(report['dropped_methods'])} unused methods removed)")
+        ok = ok and size <= SE_CHAR_LIMIT
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build PAM script from src/ files")
     parser.add_argument("--minify", action="store_true", help="Also run the minifier")
@@ -88,6 +114,13 @@ def main():
         if rc != 0:
             print("ERROR: Minification failed")
             sys.exit(rc)
+        full = len(open(MINIFIED_OUTPUT, encoding="utf-8").read())
+        if full > SE_CHAR_LIMIT:
+            print(f"NOTE:      PAM_Minified.cs ({full} chars) no longer fits in one PB; use PAM_Ship.cs / PAM_Controller.cs")
+        print()
+        if not build_variants(combined):
+            print("ERROR: a variant is over the programmable block limit")
+            sys.exit(1)
 
     print("\nDone.")
 

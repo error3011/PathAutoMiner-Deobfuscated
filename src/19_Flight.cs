@@ -2,7 +2,8 @@
 
 void UpdateFlight()
 {
-    Vector3 toTarget = navTargetPos - shipPosition;
+    Vector3 flyTarget = navTargetPos + trafficShift; // traffic: keep right of an oncoming PAM ship
+    Vector3 toTarget = flyTarget - shipPosition;
     if (toTarget.Length() == 0) toTarget = new Vector3(0, 0, -1);
     Vector3 localTarget = LocalTransformDirection(remoteControl, toTarget);
     Vector3 targetDir = Vector3.Normalize(localTarget);
@@ -14,6 +15,8 @@ void UpdateFlight()
     if (!thrustEnabled) maxSpeed = 0;
     if (slowOnMisalign) maxSpeed = Math.Max(0, 1 - currentAngleError / alignThreshold) * maxSpeed;
     if (generalSpeedLimit > 0) maxSpeed = Math.Min(generalSpeedLimit, maxSpeed);
+    if (pathBlocked) maxSpeed = 0; // obstacle brake: cancel velocity and hold position
+    if (trafficSpeedLimit >= 0) maxSpeed = Math.Min(maxSpeed, trafficSpeedLimit); // keep distance to a PAM ship ahead
     if (softApproach) maxSpeed *= (float)Math.Min(1, SafeDiv(toTarget.Length(), wpReachedDist) / 2);
 
     Vector3 localVelocity = LocalTransformDirection(remoteControl, remoteControl.GetShipVelocities().LinearVelocity);
@@ -33,7 +36,7 @@ void UpdateFlight()
 
     thrustForce = shipMass * desiredVelocity - localGravity * shipMass;
     ApplyThrustOverride(thrustForce, thrustActive);
-    distToTarget = Vector3.Distance(shipPosition, navTargetPos);
+    distToTarget = Vector3.Distance(shipPosition, flyTarget);
 }
 
 float SmoothThrust(float value, ref float state, float step, float maxThrust, float maxMultiplier)

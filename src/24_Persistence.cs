@@ -62,6 +62,9 @@ String BuildSaveData()
     AppendStorage(";");
     for (int i = 0; i < waypoints.Count; i++)
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
+    // section 5 (co-op rows) was added after 1.3.1; older saves simply don't have it
+    AppendStorage(";", false);
+    AppendStorage(doneRows + "|" + myRow, false);
     String data = saveBuffer.ToString();
     saveBuffer.Clear();
     return data;
@@ -159,6 +162,10 @@ DataResult RestoreFrom(String data)
         if (lines.Count() >= 1 && lines[0] != "")
             for (int i = 0; i < lines.Length; i++)
                 waypoints.Add(StringToWaypoint(SafeElement(lines, i)));
+
+        lines = SafeElement(sections, 5).Split('|');
+        doneRows = SafeElement(lines, 0);
+        if (!int.TryParse(SafeElement(lines, 1), out myRow)) myRow = -1;
     }
     catch { return DataResult.Failed; }
 
@@ -196,11 +203,16 @@ void ExportData()
     statusMessage = "Exported " + waypoints.Count + " waypoints";
 }
 
-void ImportData()
+void ImportData(bool jobOnly)
 {
     IMyTerminalBlock block = FindDataBlock();
     if (block == null) { statusMessage = "Import: name a block " + dataTag; return; }
-    String data = block.CustomData.Replace("\r", "");
+    ImportText(block.CustomData, jobOnly);
+}
+
+void ImportText(String data, bool jobOnly)
+{
+    data = data.Replace("\r", "");
     if (data.StartsWith("//"))
     {
         int nl = data.IndexOf('\n');
@@ -212,6 +224,26 @@ void ImportData()
     StopAll();
     String backup = BuildSaveData();
     DataResult result = RestoreFrom(data);
+    if (result == DataResult.Success && jobOnly)
+    {
+        // keep this ship's own path, home dock and settings; take only the job from the export,
+        // with fresh progress, so several ships can mine the same job (co-op)
+        WaypointInfo job = new WaypointInfo(jobPosition);
+        Vector3 mineForward = miningForward, mineDown = miningDown;
+        int w = configWidth, h = configHeight, d = configDepth;
+        StartPosition start = startPosition;
+        DepthMode depth = depthMode;
+        float overlapW = widthOverlap, overlapH = heightOverlap;
+        RestoreFrom(backup);
+        jobPosition = job; miningForward = mineForward; miningDown = mineDown;
+        configWidth = w; configHeight = h; configDepth = d;
+        startPosition = start; depthMode = depth; widthOverlap = overlapW; heightOverlap = overlapH;
+        jobState = JobState.Paused;
+        UpdateJobConfig(true, true);
+        jobState = JobState.Paused; lastJobState = JobState.Paused;
+        statusMessage = "Imported job, run CONT";
+        return;
+    }
     if (result == DataResult.Success)
     {
         needPositionUpdate = false;

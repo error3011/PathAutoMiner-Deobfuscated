@@ -53,6 +53,20 @@ const float minEjection = 25f;//[%] Min amount of ejected cargo to continue job
 //LCD
 const bool setLCDFontAndSize = true;
 
+//Obstacle brake: cameras on the ship raycast towards the flight target and stop the ship when
+//something is in the way (path flights and hole-to-hole moves; off while mining and docking).
+//A camera only scans within 45° of where it faces: add cameras facing every direction the ship travels.
+const bool obstacleBrake = true;
+const float obstacleLookAhead = 3f;//[s] scan distance = speed * this + ship size
+const float obstacleTimeout = 10f;//[s] show "Path blocked" after holding this long
+
+//Traffic between PAM ships (needs a working antenna; independent of Broadcast_Channel)
+//Ships keep right of the recorded path, keep distance to a PAM ship ahead, and ships on the
+//same job (IMPORT JOB) mine different rows of holes.
+const bool trafficEnabled = true;
+const float laneOffset = 0.75f;//multiplied with ship size: how far to keep right of the path; 0 = fly on the path
+const float followGap = 1f;//multiplied with ship size: free space kept behind a PAM ship ahead
+
 //Server restart / world load
 const bool resumeAfterRestart = true;//continue a job that was running when the world was saved (false = stay paused, like the original)
 

@@ -73,7 +73,19 @@ void UpdateNavigation()
         }
         if (stuckCounter == 0)
         {
-            SpiralResult result = GetNextHolePosition(currentHoleIndex, stateFirstTick);
+            // co-op: take a row no other ship on this job is on (a single ship keeps the original order)
+            int claimed = ClaimHole(currentHoleIndex);
+            if (claimed < 0)
+            {
+                if (!coopWaiting) { coopWaiting = true; coopWaitPos = shipPosition; }
+                SetFlightTarget(coopWaitPos, 0);
+                statusMessage = "Waiting for a free row";
+                return;
+            }
+            coopWaiting = false;
+            bool jumped = claimed != currentHoleIndex;
+            if (jumped) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
+            SpiralResult result = GetNextHolePosition(currentHoleIndex, stateFirstTick || jumped);
             if (result == SpiralResult.AllDone)
             {
                 jobState = JobState.Done;
@@ -321,7 +333,7 @@ void UpdateNavigation()
                 if (pathWaypointIndex >= 1 && pathWaypointIndex < waypoints.Count - 1)
                     pathSegmentDir = wp.position - waypoints[pathWaypointIndex - pathDirection].position;
                 else currentPathWaypoint = null;
-                navTargetPos = wp.position;
+                navTargetPos = wp.position + GetLaneOffset(pathWaypointIndex, pathDirection);
                 atWaypoint = true;
             }
         }

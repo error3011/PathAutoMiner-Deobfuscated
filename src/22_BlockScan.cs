@@ -360,5 +360,6 @@ bool IsOnPath(Vector3 pos)
     double distToClosest = Vector3.Distance(points[closestIdx], pos);
     double prevSpacing = Vector3.Distance(points[Math.Max(0, closestIdx - 1)], points[closestIdx]) * 1.5f;
     double nextSpacing = Vector3.Distance(points[Math.Min(points.Count - 1, closestIdx + 1)], points[closestIdx]) * 1.5f;
-    return distToClosest < prevSpacing || distToClosest < nextSpacing;
+    // ships fly up to laneOffset * ship size beside the path (traffic lanes)
+    return distToClosest < prevSpacing || distToClosest < nextSpacing || distToClosest < laneOffset * shipDiameter * 1.5f;
 }

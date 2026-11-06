@@ -55,6 +55,7 @@ void ShipMainLoop(string argument)
             scanPhase = 0;
             StartProfile();
             ScanBlocks3();
+            ScanCameras();
             EndProfile("Scan 3");
             lastScanTime = DateTime.Now;
 
@@ -140,6 +141,7 @@ void ShipMainLoop(string argument)
                 leftDirection = remoteControl.WorldMatrix.Left;
                 downDirection = remoteControl.WorldMatrix.Down;
                 UpdatePathRecording();
+                UpdateTraffic();
 
                 if (resumePending)
                 {
@@ -159,6 +161,8 @@ void ShipMainLoop(string argument)
                     UpdateNavigation();
                     UpdateProgress(false);
                     EndProfile(stateName);
+                    UpdateTrafficAvoidance();
+                    UpdateObstacleCheck();
 
                     StartProfile();
                     UpdateFlight();

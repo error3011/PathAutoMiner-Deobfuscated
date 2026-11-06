@@ -54,6 +54,20 @@ const float minEjection = 25f;//[%] Min amount of ejected cargo to continue job
 //LCD
 const bool setLCDFontAndSize = true;
 
+//Obstacle brake: cameras on the ship raycast towards the flight target and stop the ship when
+//something is in the way (path flights and hole-to-hole moves; off while mining and docking).
+//A camera only scans within 45° of where it faces: add cameras facing every direction the ship travels.
+const bool obstacleBrake = true;
+const float obstacleLookAhead = 3f;//[s] scan distance = speed * this + ship size
+const float obstacleTimeout = 10f;//[s] show "Path blocked" after holding this long
+
+//Traffic between PAM ships (needs a working antenna; independent of Broadcast_Channel)
+//Ships keep right of the recorded path, keep distance to a PAM ship ahead, and ships on the
+//same job (IMPORT JOB) mine different rows of holes.
+const bool trafficEnabled = true;
+const float laneOffset = 0.75f;//multiplied with ship size: how far to keep right of the path; 0 = fly on the path
+const float followGap = 1f;//multiplied with ship size: free space kept behind a PAM ship ahead
+
 //Server restart / world load
 const bool resumeAfterRestart = true;//continue a job that was running when the world was saved (false = stay paused, like the original)
 
@@ -749,6 +763,7 @@ void ShipMainLoop(string argument)
             scanPhase = 0;
             StartProfile();
             ScanBlocks3();
+            ScanCameras();
             EndProfile("Scan 3");
             lastScanTime = DateTime.Now;
 
@@ -834,6 +849,7 @@ void ShipMainLoop(string argument)
                 leftDirection = remoteControl.WorldMatrix.Left;
                 downDirection = remoteControl.WorldMatrix.Down;
                 UpdatePathRecording();
+                UpdateTraffic();
 
                 if (resumePending)
                 {
@@ -853,6 +869,8 @@ void ShipMainLoop(string argument)
                     UpdateNavigation();
                     UpdateProgress(false);
                     EndProfile(stateName);
+                    UpdateTrafficAvoidance();
+                    UpdateObstacleCheck();
 
                     StartProfile();
                     UpdateFlight();
@@ -929,7 +947,7 @@ void ProcessShipArgument(string argument)
         case "FULL": { simulateShipFull = true; } break;
         case "RESET": { resetRequested = true; setupErrorLevel = 2; } break;
         case "EXPORT": { ExportData(); } break;
-        case "IMPORT": { ImportData(); } break;
+        case "IMPORT": { ImportData(arg1 == "JOB"); } break;
         default: unhandled = true; break;
     }
 
@@ -986,7 +1004,7 @@ String GetHelpText()
         "[START] Start job\n" + "[STOP] Stop every process\n" + "[CONT] Continue last job\n" +
         "[JOBPOS] Move to job position\n" + "[HOMEPOS] Move to home position\n\n" +
         "[FULL] Simulate ship is full\n" + "[ALIGN] Align the ship to planet\n" + "[RESET] Reset all data\n" +
-        "[EXPORT] Save path+job to " + dataTag + "\n" + "[IMPORT] Load path+job from " + dataTag + "\n";
+        "[EXPORT] Save path+job to " + dataTag + "\n" + "[IMPORT] Load path+job from " + dataTag + "\n" + "[IMPORT JOB] Load only the job (co-op)\n";
 
     if (shipMode != ShipMode.Shuttle)
         text += "[SHUTTLE] Enable shuttle mode\n" + "[NEXT] Next hole\n" + "[PREV] Previous hole\n\n" +
@@ -1889,6 +1907,7 @@ void UpdateJobConfig(bool force, bool resetProgress)
         jobWidth = configWidth;
         jobHeight = configHeight;
         holeRow = 0; holeCol = 0;
+        doneRows = ""; myRow = -1;
         maxMineDepth = 0; lastHoleIndex = 0;
         currentMineDepth = 0; currentHoleIndex = 0;
         UpdateProgress(true);
@@ -1937,6 +1956,8 @@ void StopAll()
     SetBlocksEnabled(connectors, true);
     SetSortersEnabled(true);
     returnToJobAfter = false;
+    ClearBlocked();
+    coopWaiting = false;
     damageCheckActive = false;
     simulateShipFull = false;
     undockRequested = false;
@@ -2173,7 +2194,19 @@ void UpdateNavigation()
         }
         if (stuckCounter == 0)
         {
-            SpiralResult result = GetNextHolePosition(currentHoleIndex, stateFirstTick);
+            // co-op: take a row no other ship on this job is on (a single ship keeps the original order)
+            int claimed = ClaimHole(currentHoleIndex);
+            if (claimed < 0)
+            {
+                if (!coopWaiting) { coopWaiting = true; coopWaitPos = shipPosition; }
+                SetFlightTarget(coopWaitPos, 0);
+                statusMessage = "Waiting for a free row";
+                return;
+            }
+            coopWaiting = false;
+            bool jumped = claimed != currentHoleIndex;
+            if (jumped) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
+            SpiralResult result = GetNextHolePosition(currentHoleIndex, stateFirstTick || jumped);
             if (result == SpiralResult.AllDone)
             {
                 jobState = JobState.Done;
@@ -2421,7 +2454,7 @@ void UpdateNavigation()
                 if (pathWaypointIndex >= 1 && pathWaypointIndex < waypoints.Count - 1)
                     pathSegmentDir = wp.position - waypoints[pathWaypointIndex - pathDirection].position;
                 else currentPathWaypoint = null;
-                navTargetPos = wp.position;
+                navTargetPos = wp.position + GetLaneOffset(pathWaypointIndex, pathDirection);
                 atWaypoint = true;
             }
         }
@@ -3314,7 +3347,8 @@ bool MeasureItemVolume(IMyInventory source, int idx, IMyInventory dest, out floa
 
 void UpdateFlight()
 {
-    Vector3 toTarget = navTargetPos - shipPosition;
+    Vector3 flyTarget = navTargetPos + trafficShift; // traffic: keep right of an oncoming PAM ship
+    Vector3 toTarget = flyTarget - shipPosition;
     if (toTarget.Length() == 0) toTarget = new Vector3(0, 0, -1);
     Vector3 localTarget = LocalTransformDirection(remoteControl, toTarget);
     Vector3 targetDir = Vector3.Normalize(localTarget);
@@ -3326,6 +3360,8 @@ void UpdateFlight()
     if (!thrustEnabled) maxSpeed = 0;
     if (slowOnMisalign) maxSpeed = Math.Max(0, 1 - currentAngleError / alignThreshold) * maxSpeed;
     if (generalSpeedLimit > 0) maxSpeed = Math.Min(generalSpeedLimit, maxSpeed);
+    if (pathBlocked) maxSpeed = 0; // obstacle brake: cancel velocity and hold position
+    if (trafficSpeedLimit >= 0) maxSpeed = Math.Min(maxSpeed, trafficSpeedLimit); // keep distance to a PAM ship ahead
     if (softApproach) maxSpeed *= (float)Math.Min(1, SafeDiv(toTarget.Length(), wpReachedDist) / 2);
 
     Vector3 localVelocity = LocalTransformDirection(remoteControl, remoteControl.GetShipVelocities().LinearVelocity);
@@ -3345,7 +3381,7 @@ void UpdateFlight()
 
     thrustForce = shipMass * desiredVelocity - localGravity * shipMass;
     ApplyThrustOverride(thrustForce, thrustActive);
-    distToTarget = Vector3.Distance(shipPosition, navTargetPos);
+    distToTarget = Vector3.Distance(shipPosition, flyTarget);
 }
 
 float SmoothThrust(float value, ref float state, float step, float maxThrust, float maxMultiplier)
@@ -4098,7 +4134,8 @@ bool IsOnPath(Vector3 pos)
     double distToClosest = Vector3.Distance(points[closestIdx], pos);
     double prevSpacing = Vector3.Distance(points[Math.Max(0, closestIdx - 1)], points[closestIdx]) * 1.5f;
     double nextSpacing = Vector3.Distance(points[Math.Min(points.Count - 1, closestIdx + 1)], points[closestIdx]) * 1.5f;
-    return distToClosest < prevSpacing || distToClosest < nextSpacing;
+    // ships fly up to laneOffset * ship size beside the path (traffic lanes)
+    return distToClosest < prevSpacing || distToClosest < nextSpacing || distToClosest < laneOffset * shipDiameter * 1.5f;
 }
 
 // ========================== 23_MathAndSerial.cs ==========================
@@ -4287,6 +4324,9 @@ String BuildSaveData()
     AppendStorage(";");
     for (int i = 0; i < waypoints.Count; i++)
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
+    // section 5 (co-op rows) was added after 1.3.1; older saves simply don't have it
+    AppendStorage(";", false);
+    AppendStorage(doneRows + "|" + myRow, false);
     String data = saveBuffer.ToString();
     saveBuffer.Clear();
     return data;
@@ -4384,6 +4424,10 @@ DataResult RestoreFrom(String data)
         if (lines.Count() >= 1 && lines[0] != "")
             for (int i = 0; i < lines.Length; i++)
                 waypoints.Add(StringToWaypoint(SafeElement(lines, i)));
+
+        lines = SafeElement(sections, 5).Split('|');
+        doneRows = SafeElement(lines, 0);
+        if (!int.TryParse(SafeElement(lines, 1), out myRow)) myRow = -1;
     }
     catch { return DataResult.Failed; }
 
@@ -4421,11 +4465,16 @@ void ExportData()
     statusMessage = "Exported " + waypoints.Count + " waypoints";
 }
 
-void ImportData()
+void ImportData(bool jobOnly)
 {
     IMyTerminalBlock block = FindDataBlock();
     if (block == null) { statusMessage = "Import: name a block " + dataTag; return; }
-    String data = block.CustomData.Replace("\r", "");
+    ImportText(block.CustomData, jobOnly);
+}
+
+void ImportText(String data, bool jobOnly)
+{
+    data = data.Replace("\r", "");
     if (data.StartsWith("//"))
     {
         int nl = data.IndexOf('\n');
@@ -4437,6 +4486,26 @@ void ImportData()
     StopAll();
     String backup = BuildSaveData();
     DataResult result = RestoreFrom(data);
+    if (result == DataResult.Success && jobOnly)
+    {
+        // keep this ship's own path, home dock and settings; take only the job from the export,
+        // with fresh progress, so several ships can mine the same job (co-op)
+        WaypointInfo job = new WaypointInfo(jobPosition);
+        Vector3 mineForward = miningForward, mineDown = miningDown;
+        int w = configWidth, h = configHeight, d = configDepth;
+        StartPosition start = startPosition;
+        DepthMode depth = depthMode;
+        float overlapW = widthOverlap, overlapH = heightOverlap;
+        RestoreFrom(backup);
+        jobPosition = job; miningForward = mineForward; miningDown = mineDown;
+        configWidth = w; configHeight = h; configDepth = d;
+        startPosition = start; depthMode = depth; widthOverlap = overlapW; heightOverlap = overlapH;
+        jobState = JobState.Paused;
+        UpdateJobConfig(true, true);
+        jobState = JobState.Paused; lastJobState = JobState.Paused;
+        statusMessage = "Imported job, run CONT";
+        return;
+    }
     if (result == DataResult.Success)
     {
         needPositionUpdate = false;
@@ -5299,3 +5368,306 @@ String FormatTime(int seconds)
 
 string FormatFloat(float v) { return Math.Round(v, 2) + " "; }
 string FormatVector(Vector3 v) { return "X" + FormatFloat(v.X) + "Y" + FormatFloat(v.Y) + "Z" + FormatFloat(v.Z); }
+
+// ========================== 29_ObstacleBrake.cs ==========================
+// ========================== OBSTACLE BRAKE (cameras) ==========================
+// Cameras on the ship raycast towards the current flight target. If something is in the way
+// the ship brakes and holds position (UpdateFlight uses maxSpeed = 0) until the way is clear.
+// Active only for free flight: path flights and hole-to-hole moves. Off while mining, backing
+// out of a hole and docking, where the ship is meant to be close to voxels and blocks.
+
+List<IMyCameraBlock> cameras = new List<IMyCameraBlock>();
+List<long> ownGridIds = new List<long>();
+bool pathBlocked = false;
+int clearScans = 0;
+int cameraIndex = 0;
+DateTime blockedSince = DateTime.Now;
+String blockedBy = "";
+
+void ScanCameras()
+{
+    cameras.Clear();
+    ownGridIds.Clear();
+    if (!obstacleBrake) return;
+    gridTerminalSystem.GetBlocksOfType(cameras, q => q.CubeGrid.IsSameConstructAs(Me.CubeGrid) && q.IsFunctional);
+    for (int i = 0; i < cameras.Count; i++)
+    {
+        cameras[i].EnableRaycast = true;
+        if (!ownGridIds.Contains(cameras[i].CubeGrid.EntityId)) ownGridIds.Add(cameras[i].CubeGrid.EntityId);
+    }
+    if (!ownGridIds.Contains(Me.CubeGrid.EntityId)) ownGridIds.Add(Me.CubeGrid.EntityId);
+}
+
+bool IsFreeFlightState(NavState s)
+{
+    return s == NavState.FlyToXY || s == NavState.FlyToJobArea || s == NavState.FlyToDockArea ||
+        s == NavState.FlyToPath || s == NavState.FlyToJobPos || s == NavState.FlyToDropPos || s == NavState.FlyToDropPos2;
+}
+
+void ClearBlocked()
+{
+    pathBlocked = false;
+    clearScans = 0;
+    blockedBy = "";
+}
+
+void UpdateObstacleCheck()
+{
+    if (!obstacleBrake || cameras.Count == 0 || !IsFreeFlightState(currentNavState)) { ClearBlocked(); return; }
+    Vector3 flyTarget = navTargetPos + trafficShift;
+    Vector3 toTarget = flyTarget - shipPosition;
+    float targetDist = toTarget.Length();
+    if (targetDist < 1f) { ClearBlocked(); return; }
+    Vector3 dir = toTarget / targetDist;
+
+    // Scan up to a little past the target (obstacles behind the target don't matter),
+    // and no further than the look-ahead distance for the current speed.
+    float lookDist = shipSpeed * obstacleLookAhead + shipDiameter;
+    Vector3 rayEnd = flyTarget + dir * (shipDiameter * 0.25f);
+
+    for (int n = 0; n < cameras.Count; n++)
+    {
+        cameraIndex = (cameraIndex + 1) % cameras.Count;
+        IMyCameraBlock cam = cameras[cameraIndex];
+        if (!cam.IsFunctional || !cam.IsWorking) continue;
+        Vector3 camPos = cam.GetPosition();
+        Vector3 end = rayEnd;
+        if (Vector3.Distance(camPos, end) > lookDist) end = camPos + dir * lookDist;
+        if (!cam.CanScan(end)) continue; // outside this camera's cone, or still charging
+
+        MyDetectedEntityInfo hit = cam.Raycast(end);
+        // PAM ships that send traffic messages are handled by the spacing logic, not by braking
+        bool obstacle = !hit.IsEmpty() && !ownGridIds.Contains(hit.EntityId) && !IsTrafficShip(hit.EntityId) &&
+            hit.Type != MyDetectedEntityType.FloatingObject;
+        if (obstacle)
+        {
+            if (!pathBlocked) blockedSince = DateTime.Now;
+            pathBlocked = true;
+            clearScans = 0;
+            blockedBy = hit.Type.ToString();
+        }
+        else if (pathBlocked && ++clearScans >= 3) ClearBlocked();
+        break; // one raycast per run is enough at 6 runs per second
+    }
+
+    if (pathBlocked && (DateTime.Now - blockedSince).TotalSeconds > obstacleTimeout)
+        statusMessage = "Path blocked: " + blockedBy;
+}
+
+// ========================== 30_Traffic.cs ==========================
+// ========================== TRAFFIC & CO-OP MINING ==========================
+// PAM ships share a small, frequent traffic message (own IGC tag, independent of the controller
+// protocol and of Broadcast_Channel): position, velocity, size, job and the row of holes they
+// work on. It is used for:
+//  - lanes: on the recorded path, ships keep right of it by laneOffset (tapering to the path
+//    near both ends), so ships going opposite ways pass side by side
+//  - spacing: slow down / hold behind a PAM ship ahead; keep right when one comes head-on
+//  - co-op mining: ships on the same job (IMPORT JOB) claim rows of holes, skip rows other
+//    ships are on or right next to, and share which rows are finished
+
+const String TRAFFIC_TAG = "[PAMTFC]";
+const float TRAFFIC_TIMEOUT = 5f; //[s] forget ships not heard from for this long
+const float FOLLOW_TIME = 2f;     //[s] time to close the gap to a ship ahead
+
+class TrafficShip
+{
+    public long id;
+    public Vector3 pos, vel;
+    public float diameter;
+    public String job = "";
+    public int row = -1;
+    public DateTime time;
+}
+
+IMyBroadcastListener trafficListener = null;
+long myGridId = 0;
+List<TrafficShip> traffic = new List<TrafficShip>();
+Vector3 trafficShift = new Vector3();
+float trafficSpeedLimit = -1; // -1 = no limit
+int trafficTick = 0;
+String doneRows = "";         // one char per row of holes: '1' = finished (by any co-op ship)
+int myRow = -1;               // row this ship is working on
+bool coopWaiting = false;
+Vector3 coopWaitPos = new Vector3();
+
+String JobKey()
+{
+    if (jobState == JobState.NoJob || shipMode == ShipMode.Shuttle) return "";
+    return Math.Round(jobPosition.position.X) + "|" + Math.Round(jobPosition.position.Y) + "|" + Math.Round(jobPosition.position.Z) +
+        "|" + jobWidth + "|" + jobHeight + "|" + (int)jobStartPos + "|" + Math.Round(toolWidth, 1) + "|" + Math.Round(toolHeight, 1);
+}
+
+void UpdateTraffic()
+{
+    if (!trafficEnabled) return;
+    if (trafficListener == null) trafficListener = IGC.RegisterBroadcastListener(TRAFFIC_TAG);
+    myGridId = Me.CubeGrid.EntityId;
+    int budget = 30;
+    while (trafficListener.HasPendingMessage && budget-- > 0)
+    {
+        String data = trafficListener.AcceptMessage().Data as String;
+        if (data != null) ParseTraffic(data);
+    }
+    for (int i = traffic.Count - 1; i >= 0; i--)
+        if ((DateTime.Now - traffic[i].time).TotalSeconds > TRAFFIC_TIMEOUT) traffic.RemoveAt(i);
+
+    if (currentNavState == NavState.Idle || ++trafficTick < 3) return; // ~2 messages per second
+    trafficTick = 0;
+    bool inJob = currentNavState == NavState.FlyToXY || currentNavState == NavState.Mining || currentNavState == NavState.Returning;
+    IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
+        VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
+        (inJob ? myRow : -1) + ";" + doneRows);
+}
+
+void ParseTraffic(String data)
+{
+    try
+    {
+        String[] f = data.Split(';');
+        if (f.Length < 7) return;
+        long id = long.Parse(f[0]);
+        if (id == myGridId) return;
+        TrafficShip ship = null;
+        for (int i = 0; i < traffic.Count; i++) if (traffic[i].id == id) ship = traffic[i];
+        if (ship == null) { ship = new TrafficShip(); ship.id = id; traffic.Add(ship); }
+        ship.pos = StringToVector(f[1]);
+        ship.vel = StringToVector(f[2]);
+        ship.diameter = float.Parse(f[3]);
+        ship.job = f[4];
+        ship.row = int.Parse(f[5]);
+        ship.time = DateTime.Now;
+        if (ship.job != "" && ship.job == JobKey()) MergeDoneRows(f[6]);
+    }
+    catch { } // malformed message from another script: ignore
+}
+
+bool IsTrafficShip(long id)
+{
+    for (int i = 0; i < traffic.Count; i++) if (traffic[i].id == id) return true;
+    return false;
+}
+
+// ---- lanes ----
+
+// Keep-right offset for path waypoint idx when travelling in pathDir (+1/-1): perpendicular to
+// the path and to "up", so opposite directions end up on opposite sides whatever way the path
+// was recorded. Tapers to 0 near both path ends (dock and job).
+Vector3 GetLaneOffset(int idx, int pathDir)
+{
+    if (laneOffset <= 0 || waypoints.Count < 2 || idx < 0 || idx >= waypoints.Count) return new Vector3();
+    WaypointInfo wp = waypoints[idx];
+    Vector3 travel = (waypoints[Math.Min(waypoints.Count - 1, idx + 1)].position - waypoints[Math.Max(0, idx - 1)].position) * pathDir;
+    Vector3 up = wp.gravity.LengthSquared() > 0.01f ? -Vector3.Normalize(wp.gravity) : -wp.downDir;
+    Vector3 right = Vector3.Cross(travel, up);
+    if (right.LengthSquared() < 0.0001f) return new Vector3();
+    float dist = laneOffset * shipDiameter;
+    float fromEnds = Math.Min(Vector3.Distance(wp.position, waypoints[0].position),
+        Vector3.Distance(wp.position, waypoints[waypoints.Count - 1].position));
+    return Vector3.Normalize(right) * dist * Math.Min(1, fromEnds / (dist * 4));
+}
+
+// ---- spacing ----
+
+void UpdateTrafficAvoidance()
+{
+    trafficShift = new Vector3();
+    trafficSpeedLimit = -1;
+    if (!trafficEnabled || traffic.Count == 0 || !IsFreeFlightState(currentNavState)) return;
+    ComputeTrafficAvoidance(remoteControl.GetNaturalGravity());
+}
+
+void ComputeTrafficAvoidance(Vector3 gravity)
+{
+    Vector3 toTarget = navTargetPos - shipPosition;
+    float targetDist = toTarget.Length();
+    if (targetDist < 1f) return;
+    Vector3 dir = toTarget / targetDist;
+    Vector3 up = gravity.LengthSquared() > 0.01f ? -Vector3.Normalize(gravity) : -downDirection;
+    Vector3 right = Vector3.Cross(dir, up);
+    right = right.LengthSquared() < 0.0001f ? -leftDirection : Vector3.Normalize(right);
+
+    for (int i = 0; i < traffic.Count; i++)
+    {
+        TrafficShip other = traffic[i];
+        Vector3 pos = other.pos + other.vel * (float)(DateTime.Now - other.time).TotalSeconds;
+        Vector3 rel = pos - shipPosition;
+        float along = Vector3.Dot(rel, dir);
+        if (along <= 0) continue; // behind
+        float clear = (shipDiameter + other.diameter) * 0.5f;
+        if ((rel - dir * along).Length() > clear * 1.2f) continue; // not in my corridor
+        float otherAlong = Vector3.Dot(other.vel, dir);
+        if (otherAlong < -1f)
+        {
+            // head-on: both ships see each other as oncoming and both keep right
+            if (along < (shipSpeed - otherAlong) * 6f + clear * 4f) trafficShift = right * clear * 1.3f;
+        }
+        else
+        {
+            // same direction or stopped: follow at a distance, hold if it stops
+            float gap = along - clear - followGap * shipDiameter;
+            float limit = Math.Max(0, otherAlong) + Math.Max(0, gap) / FOLLOW_TIME;
+            if (trafficSpeedLimit < 0 || limit < trafficSpeedLimit) trafficSpeedLimit = limit;
+        }
+    }
+}
+
+// ---- co-op mining ----
+
+bool EnsureDoneRows()
+{
+    if (doneRows.Length == Math.Max(0, jobHeight)) return false;
+    doneRows = new String('0', Math.Max(0, jobHeight));
+    myRow = -1;
+    return true;
+}
+
+void MergeDoneRows(String other)
+{
+    EnsureDoneRows();
+    if (other.Length != doneRows.Length) return;
+    char[] rows = doneRows.ToCharArray();
+    for (int i = 0; i < rows.Length; i++) if (other[i] == '1') rows[i] = '1';
+    doneRows = new String(rows);
+}
+
+bool IsRowDone(int row) { return row >= 0 && row < doneRows.Length && doneRows[row] == '1'; }
+
+void SetRowDone(int row)
+{
+    if (row < 0 || row >= doneRows.Length) return;
+    char[] rows = doneRows.ToCharArray();
+    rows[row] = '1';
+    doneRows = new String(rows);
+}
+
+bool IsRowClaimed(int row)
+{
+    String key = JobKey();
+    for (int i = 0; i < traffic.Count; i++)
+        if (traffic[i].job == key && traffic[i].row >= 0 && Math.Abs(traffic[i].row - row) <= 1) return true;
+    return false;
+}
+
+// Called before choosing hole idx. Returns the hole to mine, -1 to wait (the rows left are taken
+// by other ships), or an index past the end when every row is finished. A single ship gets its
+// holes in the original order.
+int ClaimHole(int idx)
+{
+    if (jobWidth < 1 || jobHeight < 1) return idx;
+    // no record yet (new job, or a job saved by an older version): rows before the current
+    // hole were mined in order, so count them as finished
+    if (EnsureDoneRows()) for (int r = 0; r < idx / jobWidth && r < jobHeight; r++) SetRowDone(r);
+    if (myRow >= 0 && idx >= (myRow + 1) * jobWidth) { SetRowDone(myRow); myRow = -1; }
+    int row = idx / jobWidth;
+    if (row == myRow && !IsRowDone(row)) return idx; // still inside my row
+    bool anyLeft = false;
+    for (int r = 0; r < jobHeight; r++)
+    {
+        if (IsRowDone(r)) continue;
+        anyLeft = true;
+        if (trafficEnabled && IsRowClaimed(r)) continue;
+        myRow = r;
+        return r == row ? idx : r * jobWidth;
+    }
+    return anyLeft ? -1 : jobWidth * jobHeight;
+}
