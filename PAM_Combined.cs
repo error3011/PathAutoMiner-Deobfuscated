@@ -23,6 +23,13 @@ const String pamTag = "[PAM]";
 const String controllerTag = "[PAM-Controller]";
 const String dataTag = "[PAM-Data]"; //EXPORT/IMPORT use the Custom Data of the block with this tag
 const String dockPoolTag = "[PAM-Dock]"; //base connectors in the dock pool (used when the ship's own home dock is taken)
+
+//Station dock control (on the [PAM-Controller] PB at the station): one ship at a time is cleared to
+//move in the docking area. Ships wait at the end of their path until cleared.
+const String zoneTag = "[PAM-Zone]"; //sensor(s) covering the docking area: no clearance while another ship moves inside
+const String laneTag = "[PAM-Lane]"; //camera next to a connector, facing out along its approach: lane must be clear
+const float dockLaneLength = 40f;//[m] how far the lane cameras check in front of their connector
+const float dockRequestDistance = 300f;//[m] ships ask the station for clearance this close to their home dock, and wait outside the [PAM-Zone] sensor area
 //Tag for LCD's of cockpits and other blocks: [PAM:<lcdIndex>] e.g: [PAM:1]
 
 const int gyroSpeedSmall = 15; //[RPM] small ship
@@ -852,6 +859,7 @@ void ShipMainLoop(string argument)
                 downDirection = remoteControl.WorldMatrix.Down;
                 UpdatePathRecording();
                 UpdateTraffic();
+                UpdateDockClearance();
 
                 if (resumePending)
                 {
@@ -1641,6 +1649,10 @@ void AdvanceHole(bool previous)
 {
     if (previous) currentHoleIndex = Math.Max(0, currentHoleIndex - 1);
     else currentHoleIndex++;
+    // co-op record: holes before the new one count as finished, the rest as not finished
+    EnsureHoleOrder(); EnsureDoneHoles();
+    for (int k = 0; k < holeCells.Count && k < doneHoles.Length; k++) SetHoleDone(holeCells[k], k < currentHoleIndex);
+    myHole = -1;
     UpdateProgress(true);
 }
 
@@ -1910,7 +1922,7 @@ void UpdateJobConfig(bool force, bool resetProgress)
         jobWidth = configWidth;
         jobHeight = configHeight;
         holeRow = 0; holeCol = 0;
-        doneRows = ""; myRow = -1;
+        doneHoles = ""; myHole = -1;
         maxMineDepth = 0; lastHoleIndex = 0;
         currentMineDepth = 0; currentHoleIndex = 0;
         UpdateProgress(true);
@@ -1962,6 +1974,7 @@ void StopAll()
     ClearBlocked();
     coopWaiting = false;
     dockWaiting = false;
+    ReleaseDock();
     damageCheckActive = false;
     simulateShipFull = false;
     undockRequested = false;
@@ -2204,13 +2217,12 @@ void UpdateNavigation()
             {
                 if (!coopWaiting) { coopWaiting = true; coopWaitPos = shipPosition; }
                 SetFlightTarget(coopWaitPos, 0);
-                statusMessage = "Waiting for a free row";
+                statusMessage = "Waiting for a free hole";
                 return;
             }
             coopWaiting = false;
-            bool jumped = claimed != currentHoleIndex;
-            if (jumped) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
-            SpiralResult result = GetNextHolePosition(currentHoleIndex, stateFirstTick || jumped);
+            if (claimed != currentHoleIndex) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
+            SpiralResult result = SetHolePosition(currentHoleIndex);
             if (result == SpiralResult.AllDone)
             {
                 jobState = JobState.Done;
@@ -2230,6 +2242,8 @@ void UpdateNavigation()
         }
         else
         {
+            // co-op: a ship with a lower id claimed this hole (or one next to it) at the same moment -> pick again
+            if (myHole >= 0 && HoleConflict(myHole, true)) { stuckCounter = 0; return; }
             if (distToTarget < wpReachedDist) { SetNavState(NavState.Mining); return; }
         }
     }
@@ -2379,7 +2393,11 @@ void UpdateNavigation()
             if (currentNavState == NavState.FlyToDockArea || shipMode == ShipMode.Shuttle)
             {
                 // dock pool: own home dock if free, else a free pool connector, else wait at the path end
-                if (shipMode != ShipMode.Shuttle) { poolDock = null; poolDockId = 0; dockWaiting = !ChooseDock(1); }
+                if (shipMode != ShipMode.Shuttle)
+                {
+                    if (StationCleared(1)) ApplyStationDock(); // station dock control: the dock it assigned
+                    else { poolDock = null; poolDockId = 0; dockWaiting = !ChooseDock(1); }
+                }
                 WaypointInfo dock = GetCurrentDock();
                 pathFollowData = new PathFollowData();
                 pathFollowData.target = dock;
@@ -2434,11 +2452,34 @@ void UpdateNavigation()
             currentPathWaypoint = null;
         }
 
-        if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick)
+        if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick && !StationHandlesMe())
         {
             WaypointInfo before = GetCurrentDock();
             dockWaiting = !ChooseDock(1);
             if (GetCurrentDock() != before) { SetNavState(NavState.FlyToDockArea); return; }
+        }
+
+        // station dock control: cleared -> fly to the connector it assigned
+        if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick && StationCleared(1) && ApplyStationDock())
+        { SetNavState(NavState.FlyToDockArea); return; }
+
+        // station dock control: wait outside the docking area until cleared, turned towards the dock
+        bool inDockZone = false;
+        if (currentNavState == NavState.FlyToDockArea && !stateFirstTick && pathWaypointIndex >= 0 && pathWaypointIndex < waypoints.Count)
+        {
+            Vector3 cur = waypoints[pathWaypointIndex].position + GetLaneOffset(pathWaypointIndex, pathDirection);
+            int nextIdx = pathWaypointIndex + pathDirection;
+            Vector3 next = pathDirection != 0 && nextIdx >= 0 && nextIdx < waypoints.Count ? waypoints[nextIdx].position : pathFollowData.target.position;
+            if (HoldForDockArea(cur, next))
+            {
+                if (!dockHoldSet) { dockHoldSet = true; dockHoldPos = InDockZone(cur) ? shipPosition : cur; }
+                SetFlightTarget(dockHoldPos, 0);
+                AlignToDown(pathFollowData.target.downDir, pathFollowData.target.forwardDir, pathFollowData.target.leftDir, false);
+                statusMessage = "Waiting for dock clearance";
+                return;
+            }
+            dockHoldSet = false;
+            inDockZone = StationCleared(1) && (InDockZone(shipPosition) || InDockZone(next));
         }
 
         CalculatePathSpeeds(waypoints, pathDirection, pathFollowData.targetPositions, pathFollowData.directFlyDist, stateFirstTick, ref stuckCounter);
@@ -2449,6 +2490,7 @@ void UpdateNavigation()
             if (dist <= pathFollowData.directFlyDist) reachedEnd = true;
             if (dist <= pathFollowData.useDockDirDist) useDockDir = true;
         }
+        if (inDockZone) useDockDir = true; // cleared: keep the dock orientation and approach speed inside the docking area
         if (useDockDir) approachSpeed = pathFollowData.approachSpeed;
 
         float wpSpeed = currentPathWaypoint != null ? currentPathWaypoint.maxSpeed : shipSpeed;
@@ -2487,6 +2529,8 @@ void UpdateNavigation()
         if (reachedEnd)
         {
             waypointsRemaining = 0;
+            // station dock control: wait at the path end until the station clears this ship
+            if (currentNavState == NavState.FlyToDockArea && !CheckDockClearance()) { SetFlightTarget(navTargetPos, 0); return; }
             if (currentNavState == NavState.FlyToDockArea && dockWaiting)
             { SetFlightTarget(navTargetPos, 0); statusMessage = "Waiting for a free dock"; return; }
             if (currentNavState == NavState.FlyToDockArea || shipMode == ShipMode.Shuttle) { SetNavState(NavState.ApproachDock); return; }
@@ -2498,7 +2542,12 @@ void UpdateNavigation()
     // [ApproachDock / RetryDocking] -> approach connector
     if (currentNavState == NavState.ApproachDock || currentNavState == NavState.RetryDocking)
     {
-        if (shipMode != ShipMode.Shuttle)
+        if (shipMode != ShipMode.Shuttle && StationHandlesMe())
+        {
+            // station dock control: lost the clearance (timeout) -> back to the path end and wait
+            if (!StationCleared(1)) { SetNavState(NavState.FlyToDockArea); return; }
+        }
+        else if (shipMode != ShipMode.Shuttle)
         {
             // dock pool: a ship already docking/docked there has priority -> back to the path end
             WaypointInfo before = GetCurrentDock();
@@ -2714,8 +2763,17 @@ void UpdateNavigation()
     // [Undocking] -> disconnect and fly away from dock
     if (currentNavState == NavState.Undocking)
     {
+        // station dock control: stay docked until the station clears the undock
+        if (waitUndockClearance)
+        {
+            if (!CheckUndockClearance()) return;
+            waitUndockClearance = false;
+            SetNavState(NavState.Undocking);
+            return;
+        }
         if (stateFirstTick)
         {
+            if (!CheckUndockClearance()) { waitUndockClearance = true; return; }
             IMyShipConnector connected = FindConnector(MyShipConnectorStatus.Connected);
             if (connected == null) { SetNavState(NavState.FlyToJobArea); return; }
             IMyShipConnector other = connected.OtherConnector;
@@ -4346,9 +4404,9 @@ String BuildSaveData()
     AppendStorage(";");
     for (int i = 0; i < waypoints.Count; i++)
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
-    // section 5 (co-op rows) was added after 1.3.1; older saves simply don't have it
+    // section 5 (co-op holes) was added after 1.3.1; older saves simply don't have it
     AppendStorage(";", false);
-    AppendStorage(doneRows + "|" + myRow, false);
+    AppendStorage(doneHoles + "|" + myHole, false);
     // section 6 (dock pool)
     AppendStorage(";", false);
     AppendStorage(DockPoolToString(), false);
@@ -4451,8 +4509,9 @@ DataResult RestoreFrom(String data)
                 waypoints.Add(StringToWaypoint(SafeElement(lines, i)));
 
         lines = SafeElement(sections, 5).Split('|');
-        doneRows = SafeElement(lines, 0);
-        if (!int.TryParse(SafeElement(lines, 1), out myRow)) myRow = -1;
+        doneHoles = SafeElement(lines, 0);
+        if (!int.TryParse(SafeElement(lines, 1), out myHole)) myHole = -1;
+        if (doneHoles.Length != jobWidth * jobHeight) { doneHoles = ""; myHole = -1; } // older save: rows, not holes
         DockPoolFromString(SafeElement(sections, 6));
     }
     catch { return DataResult.Failed; }
@@ -4871,6 +4930,7 @@ void ControllerMainLoop(string argument)
         }
     }
 
+    if (isTick) UpdateDockControl(); // station dock control (clearance for one ship at a time)
     UpdateControllerDisplays();
 }
 
@@ -5012,6 +5072,7 @@ void ScanControllerBlocks()
     lcdPanels = FilterByTag(lcdPanels, pamTag, true);
     SetupTaggedSurfaces(taggedBlocks);
     SetupDebugPanels();
+    ScanDockArea();
     SetLCDFormat(lcdPanels, setLCDFontAndSize, 1.15f, false);
     SetLCDFormat(textSurfaces, setLCDFontAndSize, 1.15f, true);
 
@@ -5067,7 +5128,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
     String thinSeparator = "--------------------------------------------\n";
 
     if (selectedShip == null || currentMenu == MenuPage.Main || currentMenu == MenuPage.SendCommandAll)
-        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n";
+        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n" + GetDockAreaLine();
     else text += GetShipStatusLine(selectedShip) + "\n";
     text += separator;
 
@@ -5484,13 +5545,13 @@ void UpdateObstacleCheck()
 // ========================== 30_Traffic.cs ==========================
 // ========================== TRAFFIC & CO-OP MINING ==========================
 // PAM ships share a small, frequent traffic message (own IGC tag, independent of the controller
-// protocol and of Broadcast_Channel): position, velocity, size, job and the row of holes they
+// protocol and of Broadcast_Channel): position, velocity, size, job and the hole they
 // work on. It is used for:
 //  - lanes: on the recorded path, ships keep right of it by laneOffset (tapering to the path
 //    near both ends), so ships going opposite ways pass side by side
 //  - spacing: slow down / hold behind a PAM ship ahead; keep right when one comes head-on
-//  - co-op mining: ships on the same job (IMPORT JOB) claim rows of holes, skip rows other
-//    ships are on or right next to, and share which rows are finished
+//  - co-op mining: ships on the same job (IMPORT JOB) claim single holes, skip holes other
+//    ships have or are too close to, and share which holes are finished
 
 const String TRAFFIC_TAG = "[PAMTFC]";
 const float TRAFFIC_TIMEOUT = 5f; //[s] forget ships not heard from for this long
@@ -5500,9 +5561,11 @@ class TrafficShip
 {
     public long id;
     public Vector3 pos, vel;
+    public Vector3 heading;  // direction to its flight target (zero when it isn't avoiding traffic)
     public float diameter;
     public String job = "";
-    public int row = -1;
+    public int hole = -1;  // co-op: grid cell it claims
+    public bool queued;    // holding outside the docking area for station clearance
     public long dock = 0;  // dock pool: connector this ship uses or heads for
     public int dockPhase = 0;
     public DateTime time;
@@ -5513,9 +5576,14 @@ long myGridId = 0;
 List<TrafficShip> traffic = new List<TrafficShip>();
 Vector3 trafficShift = new Vector3();
 float trafficSpeedLimit = -1; // -1 = no limit
+Vector3 trafficHeading = new Vector3();
+bool trafficHolding = false;
+DateTime trafficHoldSince = DateTime.Now;
+const float TRAFFIC_STUCK_TIME = 15f;  //[s] held by traffic this long -> stop waiting and pass on the right
+const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
 int trafficTick = 0;
-String doneRows = "";         // one char per row of holes: '1' = finished (by any co-op ship)
-int myRow = -1;               // row this ship is working on
+String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
+int myHole = -1;              // grid cell of the hole this ship works on
 bool coopWaiting = false;
 Vector3 coopWaitPos = new Vector3();
 
@@ -5540,12 +5608,14 @@ void UpdateTraffic()
     for (int i = traffic.Count - 1; i >= 0; i--)
         if ((DateTime.Now - traffic[i].time).TotalSeconds > TRAFFIC_TIMEOUT) traffic.RemoveAt(i);
 
-    if (currentNavState == NavState.Idle || ++trafficTick < 3) return; // ~2 messages per second
+    // idle ships send too while docked, so their connector counts as taken
+    if (++trafficTick < 3) return; // ~2 messages per second
+    if (currentNavState == NavState.Idle && FindConnector(MyShipConnectorStatus.Connected) == null) return;
     trafficTick = 0;
-    bool inJob = currentNavState == NavState.FlyToXY || currentNavState == NavState.Mining || currentNavState == NavState.Returning;
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
-        (inJob ? myRow : -1) + ";" + doneRows + ";" + ClaimedDockId() + "," + DockPhase());
+        (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
+        ";" + (dockQueued ? 1 : 0));
 }
 
 void ParseTraffic(String data)
@@ -5563,9 +5633,9 @@ void ParseTraffic(String data)
         ship.vel = StringToVector(f[2]);
         ship.diameter = float.Parse(f[3]);
         ship.job = f[4];
-        ship.row = int.Parse(f[5]);
+        ship.hole = int.Parse(f[5]);
         ship.time = DateTime.Now;
-        if (ship.job != "" && ship.job == JobKey()) MergeDoneRows(f[6]);
+        if (ship.job != "" && ship.job == JobKey()) MergeDoneHoles(f[6]);
         ship.dock = 0; ship.dockPhase = 0;
         if (f.Length >= 8)
         {
@@ -5573,6 +5643,8 @@ void ParseTraffic(String data)
             ship.dock = long.Parse(d[0]);
             ship.dockPhase = int.Parse(d[1]);
         }
+        ship.heading = f.Length >= 9 ? StringToVector(f[8]) : new Vector3();
+        ship.queued = f.Length >= 10 && f[9] == "1";
     }
     catch { } // malformed message from another script: ignore
 }
@@ -5604,108 +5676,228 @@ Vector3 GetLaneOffset(int idx, int pathDir)
 
 // ---- spacing ----
 
+Vector3 trafficMyVel = new Vector3();
+
+// Docking, undocking and backing out of a hole: traffic only slows/holds the ship, no side step
+// (the ship has to stay on its line to the connector or hole).
+bool IsPreciseFlightState(NavState s)
+{
+    return s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.Docking || s == NavState.RetryDocking ||
+        s == NavState.Undocking || s == NavState.Returning || s == NavState.AlignJob;
+}
+
 void UpdateTrafficAvoidance()
 {
     trafficShift = new Vector3();
     trafficSpeedLimit = -1;
-    if (!trafficEnabled || traffic.Count == 0 || !IsFreeFlightState(currentNavState)) return;
-    ComputeTrafficAvoidance(remoteControl.GetNaturalGravity());
+    trafficHeading = new Vector3();
+    bool free = IsFreeFlightState(currentNavState);
+    if (!trafficEnabled || (!free && !IsPreciseFlightState(currentNavState))) { trafficHolding = false; return; }
+    trafficMyVel = remoteControl.GetShipVelocities().LinearVelocity;
+    ComputeTrafficAvoidance(remoteControl.GetNaturalGravity(), !free);
 }
 
-void ComputeTrafficAvoidance(Vector3 gravity)
+void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
 {
+    trafficShift = new Vector3();
+    trafficSpeedLimit = -1;
     Vector3 toTarget = navTargetPos - shipPosition;
     float targetDist = toTarget.Length();
-    if (targetDist < 1f) return;
-    Vector3 dir = toTarget / targetDist;
+    bool haveDir = targetDist >= 1f;
+    Vector3 dir = haveDir ? toTarget / targetDist : new Vector3();
+    trafficHeading = dir; // sent to the other ships: lets them tell head-on from following, even when stopped
     Vector3 up = gravity.LengthSquared() > 0.01f ? -Vector3.Normalize(gravity) : -downDirection;
     Vector3 right = Vector3.Cross(dir, up);
     right = right.LengthSquared() < 0.0001f ? -leftDirection : Vector3.Normalize(right);
+    TrafficShip limiter = null;
 
     for (int i = 0; i < traffic.Count; i++)
     {
         TrafficShip other = traffic[i];
+        if (other.dockPhase == 3 && other.vel.LengthSquared() < 0.25f) continue; // parked at a connector
         Vector3 pos = other.pos + other.vel * (float)(DateTime.Now - other.time).TotalSeconds;
         Vector3 rel = pos - shipPosition;
-        float along = Vector3.Dot(rel, dir);
-        if (along <= 0) continue; // behind
         float clear = (shipDiameter + other.diameter) * 0.5f;
-        if ((rel - dir * along).Length() > clear * 1.2f) continue; // not in my corridor
-        float otherAlong = Vector3.Dot(other.vel, dir);
-        if (otherAlong < -1f)
+        float along = haveDir ? Vector3.Dot(rel, dir) : 0;
+        if (along > 0 && (rel - dir * along).Length() <= clear * 1.2f)
         {
-            // head-on: both ships see each other as oncoming and both keep right
-            if (along < (shipSpeed - otherAlong) * 6f + clear * 4f) trafficShift = right * clear * 1.3f;
-        }
-        else
-        {
-            // same direction or stopped: follow at a distance, hold if it stops
+            // in my corridor, ahead
+            float otherAlong = Vector3.Dot(other.vel, dir);
+            bool hasHeading = other.heading.LengthSquared() > 0.25f;
+            bool headOn = otherAlong < -1f || (hasHeading && Vector3.Dot(other.heading, dir) < -0.5f);
+            if (precise)
+            {
+                if (headOn && myGridId < other.id) continue; // the other ship gives way
+            }
+            else
+            {
+                if (other.queued && !dockQueued)
+                {
+                    // a ship waiting outside the docking area: pass it (when queueing too, line up behind it)
+                    trafficShift = right * clear * 1.3f;
+                    continue;
+                }
+                if (headOn)
+                {
+                    // head-on (also when both are slow or stopped): both keep right and pass
+                    if (along < (shipSpeed - otherAlong) * 6f + clear * 4f) trafficShift = right * clear * 1.3f;
+                    continue;
+                }
+                if (hasHeading && myGridId < other.id)
+                {
+                    // does the other ship have me ahead in its corridor too (crossing paths)? then one
+                    // of us has to go: the lower id goes, keeping right, the other one waits
+                    Vector3 back = -rel;
+                    float otherAhead = Vector3.Dot(back, other.heading);
+                    if (otherAhead > 0 && (back - other.heading * otherAhead).Length() <= clear * 1.2f)
+                    { trafficShift = right * clear * 1.3f; continue; }
+                }
+            }
+            // same direction, or a ship that isn't moving on its own: follow at a distance, hold if it stops
             float gap = along - clear - followGap * shipDiameter;
             float limit = Math.Max(0, otherAlong) + Math.Max(0, gap) / FOLLOW_TIME;
-            if (trafficSpeedLimit < 0 || limit < trafficSpeedLimit) trafficSpeedLimit = limit;
+            if (headOn) limit = Math.Max(0, gap + Math.Min(0, otherAlong) * FOLLOW_TIME * 2) / FOLLOW_TIME; // it comes towards me: stop early
+            if (trafficSpeedLimit < 0 || limit < trafficSpeedLimit) { trafficSpeedLimit = limit; limiter = other; }
+            continue;
         }
+        // any other moving ship on a collision course (crossing, from the side or from behind):
+        // the higher id stops; both stop when it's close
+        if (other.vel.LengthSquared() < 1f) continue;
+        if (haveDir && (rel - dir * along).Length() <= clear * 1.2f) continue; // behind me in my lane: it has to slow down, not me
+        Vector3 rv = other.vel - trafficMyVel;
+        float rv2 = rv.LengthSquared();
+        if (rv2 < 0.25f) continue;
+        float t = -Vector3.Dot(rel, rv) / rv2;
+        if (t <= 0 || t > 5f || (rel + rv * t).Length() >= clear * 1.1f) continue;
+        if (myGridId > other.id || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
     }
+
+    // safety net: held by traffic for too long -> stop waiting for a while and pass on the right
+    // (not while docking or in a hole, and not in the queue outside the docking area)
+    bool held = trafficSpeedLimit >= 0 && trafficSpeedLimit < 0.5f;
+    if (!held || precise || (limiter != null && limiter.queued && dockQueued)) { trafficHolding = false; return; }
+    if (!trafficHolding) { trafficHolding = true; trafficHoldSince = DateTime.Now; }
+    double heldFor = (DateTime.Now - trafficHoldSince).TotalSeconds;
+    if (heldFor > TRAFFIC_STUCK_TIME + TRAFFIC_ESCAPE_TIME) trafficHoldSince = DateTime.Now;
+    else if (heldFor > TRAFFIC_STUCK_TIME) { trafficSpeedLimit = -1; trafficShift = right * shipDiameter * 1.3f; statusMessage = "Traffic: passing a stuck ship"; }
 }
 
 // ---- co-op mining ----
+// Ships on the same job claim single holes. A claim is kept while the job runs (also while the
+// ship is away unloading), so a half-mined hole is never taken over. Holes too close to another
+// ship's hole (closer than the bigger ship's size) are skipped. Finished holes are shared.
 
-bool EnsureDoneRows()
+List<int> holeCells = new List<int>(); // mining order: grid cell (row * jobWidth + col) for each hole index
+String holeOrderKey = "";
+
+// Same order as GetNextHolePosition (top-left zigzag or centre spiral), all holes at once.
+void EnsureHoleOrder()
 {
-    if (doneRows.Length == Math.Max(0, jobHeight)) return false;
-    doneRows = new String('0', Math.Max(0, jobHeight));
-    myRow = -1;
+    String key = jobWidth + "|" + jobHeight + "|" + (int)jobStartPos;
+    if (key == holeOrderKey) return;
+    holeOrderKey = key;
+    holeCells.Clear();
+    int n = jobWidth * jobHeight;
+    if (jobStartPos == StartPosition.TopLeft)
+    {
+        for (int k = 0; k < n; k++)
+        {
+            int row = k / jobWidth;
+            holeCells.Add(row * jobWidth + (row % 2 == 0 ? k - row * jobWidth : jobWidth - 1 - (k - row * jobWidth)));
+        }
+        return;
+    }
+    int halfW = (int)Math.Ceiling(jobWidth / 2f), halfH = (int)Math.Ceiling(jobHeight / 2f);
+    int halfW2 = jobWidth / 2, halfH2 = jobHeight / 2;
+    int x = 0, y = 0, dx = 0, dy = -1, max = Math.Max(jobWidth, jobHeight);
+    for (int i = 0; i < max * max; i++)
+    {
+        if (-halfW < x && x <= halfW2 && -halfH < y && y <= halfH2) holeCells.Add((y - 1 + halfH) * jobWidth + (x - 1 + halfW));
+        if (x == y || (x < 0 && x == -y) || (x > 0 && x == 1 - y)) { int t = dx; dx = -dy; dy = t; }
+        x += dx; y += dy;
+    }
+}
+
+bool EnsureDoneHoles()
+{
+    int n = Math.Max(0, jobWidth * jobHeight);
+    if (doneHoles.Length == n) return false;
+    doneHoles = new String('0', n);
+    myHole = -1;
     return true;
 }
 
-void MergeDoneRows(String other)
+void MergeDoneHoles(String other)
 {
-    EnsureDoneRows();
-    if (other.Length != doneRows.Length) return;
-    char[] rows = doneRows.ToCharArray();
-    for (int i = 0; i < rows.Length; i++) if (other[i] == '1') rows[i] = '1';
-    doneRows = new String(rows);
+    EnsureDoneHoles();
+    if (other.Length != doneHoles.Length) return;
+    char[] h = doneHoles.ToCharArray();
+    for (int i = 0; i < h.Length; i++) if (other[i] == '1') h[i] = '1';
+    doneHoles = new String(h);
 }
 
-bool IsRowDone(int row) { return row >= 0 && row < doneRows.Length && doneRows[row] == '1'; }
+bool IsHoleDone(int cell) { return cell >= 0 && cell < doneHoles.Length && doneHoles[cell] == '1'; }
 
-void SetRowDone(int row)
+void SetHoleDone(int cell, bool done)
 {
-    if (row < 0 || row >= doneRows.Length) return;
-    char[] rows = doneRows.ToCharArray();
-    rows[row] = '1';
-    doneRows = new String(rows);
+    if (cell < 0 || cell >= doneHoles.Length) return;
+    char[] h = doneHoles.ToCharArray();
+    h[cell] = done ? '1' : '0';
+    doneHoles = new String(h);
 }
 
-bool IsRowClaimed(int row)
+// Another ship on this job has this hole, or one too close to it. keeping: the hole is already
+// ours, so only a ship with a lower id makes us give it up (two ships claimed at the same moment).
+bool HoleConflict(int cell, bool keeping)
 {
+    if (!trafficEnabled) return false;
     String key = JobKey();
     for (int i = 0; i < traffic.Count; i++)
-        if (traffic[i].job == key && traffic[i].row >= 0 && Math.Abs(traffic[i].row - row) <= 1) return true;
+    {
+        TrafficShip t = traffic[i];
+        if (t.job != key || t.hole < 0 || (keeping && t.id > myGridId)) continue;
+        float dc = Math.Abs(cell % jobWidth - t.hole % jobWidth) * toolWidth;
+        float dr = Math.Abs(cell / jobWidth - t.hole / jobWidth) * toolHeight;
+        if (t.hole == cell || Math.Sqrt(dc * dc + dr * dr) < Math.Max(shipDiameter, t.diameter) * 1.1f) return true;
+    }
     return false;
 }
 
-// Called before choosing hole idx. Returns the hole to mine, -1 to wait (the rows left are taken
-// by other ships), or an index past the end when every row is finished. A single ship gets its
-// holes in the original order.
+// Called before flying to hole idx (index in the mining order). Returns the hole index to mine,
+// -1 to wait (every hole left is taken or too close to another ship), or jobWidth * jobHeight
+// when every hole is finished. A single ship gets its holes in the original order.
 int ClaimHole(int idx)
 {
-    if (jobWidth < 1 || jobHeight < 1) return idx;
-    // no record yet (new job, or a job saved by an older version): rows before the current
-    // hole were mined in order, so count them as finished
-    if (EnsureDoneRows()) for (int r = 0; r < idx / jobWidth && r < jobHeight; r++) SetRowDone(r);
-    if (myRow >= 0 && idx >= (myRow + 1) * jobWidth) { SetRowDone(myRow); myRow = -1; }
-    int row = idx / jobWidth;
-    if (row == myRow && !IsRowDone(row)) return idx; // still inside my row
+    int n = jobWidth * jobHeight;
+    if (n < 1) return idx;
+    EnsureHoleOrder();
+    // no record yet (new job, or a job saved by an older version): holes before the current one
+    // were mined in order
+    if (EnsureDoneHoles()) for (int k = 0; k < idx && k < n; k++) SetHoleDone(holeCells[k], true);
+    if (myHole >= 0 && (idx >= n || holeCells[idx] != myHole)) { SetHoleDone(myHole, true); myHole = -1; } // moved on: finished
+    if (myHole >= 0 && !IsHoleDone(myHole) && !HoleConflict(myHole, true)) return idx;
+    myHole = -1;
     bool anyLeft = false;
-    for (int r = 0; r < jobHeight; r++)
+    for (int k = 0; k < n; k++)
     {
-        if (IsRowDone(r)) continue;
+        int c = holeCells[k];
+        if (IsHoleDone(c)) continue;
         anyLeft = true;
-        if (trafficEnabled && IsRowClaimed(r)) continue;
-        myRow = r;
-        return r == row ? idx : r * jobWidth;
+        if (HoleConflict(c, false)) continue;
+        myHole = c;
+        return k;
     }
-    return anyLeft ? -1 : jobWidth * jobHeight;
+    return anyLeft ? -1 : n;
+}
+
+// hole index -> holeCol/holeRow, like GetNextHolePosition
+SpiralResult SetHolePosition(int idx)
+{
+    EnsureHoleOrder();
+    if (idx < 0 || idx >= holeCells.Count) return SpiralResult.AllDone;
+    holeCol = holeCells[idx] % jobWidth;
+    holeRow = holeCells[idx] / jobWidth;
+    return SpiralResult.Found;
 }
 
 // ========================== 31_DockPool.cs ==========================
@@ -5749,6 +5941,7 @@ WaypointInfo DockPose(Vector3 pos, Vector3 fwd, Vector3 up)
 int DockPhase()
 {
     NavState s = currentNavState;
+    if (s == NavState.Idle) return FindConnector(MyShipConnectorStatus.Connected) != null ? 3 : 0; // idle but docked still holds the connector
     if (s == NavState.Docking || s == NavState.Unloading || s == NavState.Charging || s == NavState.WaitUranium ||
         s == NavState.FillHydrogen || s == NavState.Undocking) return 3;
     if (s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.RetryDocking) return 2;
@@ -5756,7 +5949,12 @@ int DockPhase()
     return 0;
 }
 
-long ClaimedDockId() { return DockPhase() == 0 ? 0 : (poolDock != null ? poolDockId : homeConnId); }
+long ClaimedDockId()
+{
+    if (DockPhase() == 0) return 0;
+    if (StationCleared(1) && stationConn != 0) return stationConn;
+    return poolDock != null ? poolDockId : homeConnId;
+}
 
 // While docked: learn the pose relative to the base connector and the list of pool connectors.
 void LearnDocks()
@@ -5860,4 +6058,387 @@ void DockPoolFromString(String s)
         p.pos = StringToVector(e[1]); p.fwd = StringToVector(e[2]); p.up = StringToVector(e[3]);
         dockPool.Add(p);
     }
+}
+
+// ========================== 32_DockControl.cs ==========================
+// ========================== DOCK CONTROL (station, [PAM-Controller] PB) ==========================
+// The controller PB on the station runs the docking area: it reads the real status of the
+// station's connectors (catches idle PAM ships and non-PAM ships), watches the docking area with
+// [PAM-Zone] sensors and each connector's approach lane with a [PAM-Lane] camera, and clears one
+// ship at a time to move in the area. Undocking is cleared before docking, so a full dock area
+// can't jam. A station only answers ships whose home connector is on its own grid.
+
+const String DOCK_TAG = "[PAMDCK]";
+const float CLEARANCE_TIMEOUT = 120f; //[s] a cleared ship that doesn't finish loses its clearance
+
+class DockRequest
+{
+    public long ship;
+    public int kind; // 1 = dock, 2 = undock
+    public long home;
+    public bool canUsePool;
+    public DateTime first, last;
+}
+
+IMyBroadcastListener dockListener = null;
+List<DockRequest> dockRequests = new List<DockRequest>();
+List<IMyShipConnector> stationDocks = new List<IMyShipConnector>();
+List<IMySensorBlock> zoneSensors = new List<IMySensorBlock>();
+List<IMyCameraBlock> laneCameras = new List<IMyCameraBlock>();
+List<MyDetectedEntityInfo> zoneSeen = new List<MyDetectedEntityInfo>();
+long clearedShip = 0;
+int clearedKind = 0;
+long clearedConn = 0;
+DateTime clearedSince = DateTime.Now;
+String dockAreaStatus = "";
+int dockSendTick = 0;
+IMyCubeGrid stationGrid = null;
+
+void ScanDockArea()
+{
+    stationGrid = Me.CubeGrid;
+    gridTerminalSystem.GetBlocksOfType(stationDocks, q => q.CubeGrid.IsSameConstructAs(stationGrid) && q.CustomName.Contains(dockPoolTag));
+    gridTerminalSystem.GetBlocksOfType(zoneSensors, q => q.CubeGrid.IsSameConstructAs(stationGrid) && q.CustomName.Contains(zoneTag));
+    gridTerminalSystem.GetBlocksOfType(laneCameras, q => q.CubeGrid.IsSameConstructAs(stationGrid) && q.CustomName.Contains(laneTag));
+    for (int i = 0; i < zoneSensors.Count; i++) { zoneSensors[i].DetectSmallShips = true; zoneSensors[i].DetectLargeShips = true; }
+    for (int i = 0; i < laneCameras.Count; i++) laneCameras[i].EnableRaycast = true;
+}
+
+IMyShipConnector StationConnector(long id)
+{
+    if (id == 0) return null;
+    IMyShipConnector c = gridTerminalSystem.GetBlockWithId(id) as IMyShipConnector;
+    return c != null && stationGrid != null && c.CubeGrid.IsSameConstructAs(stationGrid) ? c : null;
+}
+
+bool IsDockFree(IMyShipConnector c)
+{
+    return c != null && c.IsFunctional && c.Enabled && c.Status == MyShipConnectorStatus.Unconnected;
+}
+
+// Raycast the approach lane of a connector with the [PAM-Lane] camera next to it (within 10 m).
+bool IsLaneClear(IMyShipConnector c, long ship)
+{
+    for (int i = 0; i < laneCameras.Count; i++)
+    {
+        IMyCameraBlock cam = laneCameras[i];
+        if (!cam.IsWorking || Vector3D.Distance(cam.GetPosition(), c.GetPosition()) > 10) continue;
+        Vector3D end = cam.GetPosition() + c.WorldMatrix.Forward * dockLaneLength;
+        if (!cam.CanScan(end)) continue; // camera not facing along the lane, or charging
+        MyDetectedEntityInfo hit = cam.Raycast(end);
+        if (!hit.IsEmpty() && hit.EntityId != stationGrid.EntityId && hit.EntityId != ship && hit.Type != MyDetectedEntityType.FloatingObject)
+        { dockAreaStatus = "Lane blocked: " + c.CustomName; return false; }
+    }
+    return true;
+}
+
+// Something moving in the docking area that isn't the cleared ship?
+bool IsZoneBusy()
+{
+    for (int s = 0; s < zoneSensors.Count; s++)
+    {
+        if (!zoneSensors[s].IsWorking) continue;
+        zoneSeen.Clear();
+        zoneSensors[s].DetectedEntities(zoneSeen);
+        for (int i = 0; i < zoneSeen.Count; i++)
+        {
+            MyDetectedEntityInfo e = zoneSeen[i];
+            bool grid = e.Type == MyDetectedEntityType.SmallGrid || e.Type == MyDetectedEntityType.LargeGrid;
+            if (grid && e.EntityId != clearedShip && e.Velocity.Length() > 0.5f)
+            { dockAreaStatus = "Ship moving in dock area: " + e.Name; return true; }
+        }
+    }
+    return false;
+}
+
+long PickDock(DockRequest r)
+{
+    IMyShipConnector home = StationConnector(r.home);
+    if (IsDockFree(home) && IsLaneClear(home, r.ship)) return home.EntityId;
+    if (!r.canUsePool || home == null) return 0; // home removed: the pool poses are relative to it
+    IMyShipConnector best = null;
+    double bestDist = 0;
+    for (int i = 0; i < stationDocks.Count; i++)
+    {
+        IMyShipConnector c = stationDocks[i];
+        if (!IsDockFree(c)) continue;
+        double d = Vector3D.Distance(c.GetPosition(), home.GetPosition());
+        if (best == null || d < bestDist) { if (IsLaneClear(c, r.ship)) { best = c; bestDist = d; } }
+    }
+    return best == null ? 0 : best.EntityId;
+}
+
+void GrantNext()
+{
+    DockRequest pick = null;
+    long conn = 0;
+    for (int pass = 2; pass >= 1 && pick == null; pass--)
+    {
+        DockRequest oldest = null;
+        for (int i = 0; i < dockRequests.Count; i++)
+        {
+            DockRequest r = dockRequests[i];
+            if (r.kind != pass) continue;
+            if (pass == 1)
+            {
+                long c = PickDock(r);
+                if (c == 0) continue;
+                if (oldest == null || r.first < oldest.first) { oldest = r; conn = c; }
+            }
+            else if (oldest == null || r.first < oldest.first) oldest = r;
+        }
+        pick = oldest;
+    }
+    if (pick == null) { if (dockRequests.Count > 0 && dockAreaStatus == "") dockAreaStatus = "No free dock"; return; }
+    clearedShip = pick.ship;
+    clearedKind = pick.kind;
+    clearedConn = pick.kind == 1 ? conn : 0;
+    clearedSince = DateTime.Now;
+}
+
+void UpdateDockControl()
+{
+    if (stationGrid == null) return; // first block scan not done yet
+    if (dockListener == null) dockListener = IGC.RegisterBroadcastListener(DOCK_TAG);
+    int budget = 30;
+    while (dockListener.HasPendingMessage && budget-- > 0)
+    {
+        String data = dockListener.AcceptMessage().Data as String;
+        if (data != null) HandleDockMessage(data);
+    }
+    RunDockControl();
+    if (++dockSendTick < 3) return; // ~2 per second
+    dockSendTick = 0;
+    IGC.SendBroadcastMessage(DOCK_TAG, BuildStationMessage());
+}
+
+void HandleDockMessage(String data)
+{
+    try
+    {
+        String[] f = data.Split(';');
+        long ship = long.Parse(f[1]);
+        if (f[0] == "D")
+        {
+            for (int i = dockRequests.Count - 1; i >= 0; i--) if (dockRequests[i].ship == ship) dockRequests.RemoveAt(i);
+            if (clearedShip == ship) clearedShip = 0;
+        }
+        else if (f[0] == "R" && f.Length >= 5)
+        {
+            long home = long.Parse(f[3]);
+            if (StationConnector(home) == null) return; // that ship's home is not on this station
+            DockRequest r = null;
+            for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == ship) r = dockRequests[i];
+            if (r == null) { r = new DockRequest(); r.ship = ship; r.first = DateTime.Now; dockRequests.Add(r); }
+            int kind = int.Parse(f[2]);
+            if (r.kind != kind) r.first = DateTime.Now;
+            r.kind = kind; r.home = home; r.canUsePool = f[4] == "1"; r.last = DateTime.Now;
+        }
+    }
+    catch { }
+}
+
+void RunDockControl()
+{
+    for (int i = dockRequests.Count - 1; i >= 0; i--)
+        if ((DateTime.Now - dockRequests[i].last).TotalSeconds > 3) dockRequests.RemoveAt(i);
+    DockRequest cleared = null;
+    for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == clearedShip) cleared = dockRequests[i];
+    if (clearedShip != 0 && cleared == null) clearedShip = 0;
+    if (cleared != null && (DateTime.Now - clearedSince).TotalSeconds > CLEARANCE_TIMEOUT)
+    { clearedShip = 0; cleared.first = DateTime.Now; } // too slow: back of the queue
+    dockAreaStatus = "";
+    if (clearedShip == 0 && dockRequests.Count > 0 && !IsZoneBusy()) GrantNext();
+}
+
+String BuildStationMessage()
+{
+    String msg = "S;" + stationGrid.EntityId + ";" + clearedShip + ";" + clearedKind + ";" + clearedConn + ";";
+    for (int i = 0; i < dockRequests.Count; i++) msg += (i > 0 ? "," : "") + dockRequests[i].ship;
+    msg += ";";
+    for (int i = 0; i < stationDocks.Count; i++)
+    {
+        IMyShipConnector c = stationDocks[i];
+        msg += (i > 0 ? ":" : "") + c.EntityId + "," + VectorToString(c.GetPosition()) + "," + VectorToString(c.WorldMatrix.Forward) + "," + VectorToString(c.WorldMatrix.Up);
+    }
+    // docking area: a sphere around each [PAM-Zone] sensor that contains its whole detection box
+    // (whichever way the sensor faces); ships wait outside it
+    msg += ";";
+    for (int i = 0; i < zoneSensors.Count; i++)
+    {
+        IMySensorBlock z = zoneSensors[i];
+        double r = new Vector3D(Math.Max(z.LeftExtend, z.RightExtend), Math.Max(z.TopExtend, z.BottomExtend), Math.Max(z.FrontExtend, z.BackExtend)).Length();
+        msg += (i > 0 ? ":" : "") + VectorToString(z.GetPosition()) + "," + Math.Round(r, 1);
+    }
+    return msg;
+}
+
+String GetDockAreaLine()
+{
+    if (stationDocks.Count == 0 && zoneSensors.Count == 0) return "";
+    int free = 0;
+    for (int i = 0; i < stationDocks.Count; i++) if (IsDockFree(stationDocks[i])) free++;
+    return "Docks: " + free + "/" + stationDocks.Count + " free" + (clearedShip != 0 ? (clearedKind == 1 ? " | docking" : " | undocking") : "") +
+        (dockRequests.Count > 1 ? " | " + (dockRequests.Count - 1) + " waiting" : "") + (dockAreaStatus != "" ? "\n" + dockAreaStatus : "") + "\n";
+}
+
+// ========================== 33_DockClearance.cs ==========================
+// ========================== DOCK CLEARANCE (ship side) ==========================
+// At the end of the path, and before undocking, a ship asks its station for clearance. If the
+// station's controller handles the request (its home connector is on that station), the ship
+// waits until it is cleared and docks at the connector the station assigns. If no station answers
+// within 3 s, the ship falls back to the ship-to-ship dock pool / own home dock as before.
+
+IMyBroadcastListener stationListener = null;
+int dockRequestKind = 0;        // 0 none, 1 dock, 2 undock
+DateTime dockRequestSince = DateTime.Now;
+DateTime stationAckTime = DateTime.MinValue;
+long stationCleared = 0;
+int stationClearedKind = 0;
+long stationConn = 0;
+bool waitUndockClearance = false;
+int dockRequestTick = 0;
+List<Vector3> zoneCenters = new List<Vector3>(); // the station's [PAM-Zone] sensor areas (bounding spheres)
+List<float> zoneRadii = new List<float>();
+bool dockQueued = false;  // holding outside the docking area for clearance (sent in traffic messages)
+bool dockHoldSet = false;
+Vector3 dockHoldPos = new Vector3();
+
+bool StationHandlesMe() { return dockRequestKind != 0 && (DateTime.Now - stationAckTime).TotalSeconds < 3; }
+bool StationCleared(int kind) { return StationHandlesMe() && stationCleared == myGridId && stationClearedKind == kind; }
+// still waiting for a first answer, or the station is handling this ship
+bool StationDeciding() { return StationHandlesMe() || (DateTime.Now - dockRequestSince).TotalSeconds < 3; }
+
+void RequestDock(int kind)
+{
+    if (dockRequestKind == kind) return;
+    dockRequestKind = kind;
+    dockRequestSince = DateTime.Now;
+    dockRequestTick = 3; // send right away
+}
+
+void ReleaseDock()
+{
+    if (dockRequestKind != 0 && trafficEnabled) IGC.SendBroadcastMessage(DOCK_TAG, "D;" + myGridId);
+    dockRequestKind = 0;
+    waitUndockClearance = false;
+}
+
+void UpdateDockClearance()
+{
+    if (!trafficEnabled || shipMode == ShipMode.Shuttle) return;
+    if (stationListener == null) stationListener = IGC.RegisterBroadcastListener(DOCK_TAG);
+    int budget = 20;
+    while (stationListener.HasPendingMessage && budget-- > 0)
+    {
+        String data = stationListener.AcceptMessage().Data as String;
+        if (data == null || !data.StartsWith("S;")) continue;
+        try { ParseStation(data); } catch { }
+    }
+
+    if (currentNavState != NavState.FlyToDockArea) { dockQueued = false; dockHoldSet = false; }
+
+    // finished?
+    if (dockRequestKind == 1 && FindConnector(MyShipConnectorStatus.Connected) != null) ReleaseDock();
+    if (dockRequestKind == 2 && !waitUndockClearance && currentNavState != NavState.Undocking &&
+        Vector3.Distance(shipPosition, GetCurrentDock().position) > shipDiameter * 3) ReleaseDock();
+
+    if (dockRequestKind != 0 && ++dockRequestTick >= 3)
+    {
+        dockRequestTick = 0;
+        IGC.SendBroadcastMessage(DOCK_TAG, "R;" + myGridId + ";" + dockRequestKind + ";" + homeConnId + ";" + (dockRelSet ? 1 : 0));
+    }
+}
+
+void ParseStation(String data)
+{
+    String[] f = data.Split(';');
+    if (f.Length < 7) return;
+    bool forMe = false;
+    String[] acks = f[5].Split(',');
+    for (int i = 0; i < acks.Length; i++) if (acks[i] == myGridId.ToString()) forMe = true;
+    if (!forMe) return;
+    stationAckTime = DateTime.Now;
+    stationCleared = long.Parse(f[2]);
+    stationClearedKind = int.Parse(f[3]);
+    stationConn = long.Parse(f[4]);
+    zoneCenters.Clear(); zoneRadii.Clear();
+    if (f.Length >= 8 && f[7] != "")
+    {
+        String[] z = f[7].Split(':');
+        for (int i = 0; i < z.Length; i++)
+        {
+            String[] e = z[i].Split(',');
+            if (e.Length < 2) continue;
+            zoneCenters.Add(StringToVector(e[0])); zoneRadii.Add(float.Parse(e[1]));
+        }
+    }
+    // the station's own list of pool connectors: lets ships use the pool before docking there once
+    if (f[6] == "") return;
+    String[] docks = f[6].Split(':');
+    List<PoolDock> list = new List<PoolDock>();
+    for (int i = 0; i < docks.Length; i++)
+    {
+        String[] e = docks[i].Split(',');
+        if (e.Length < 4) continue;
+        PoolDock p = new PoolDock();
+        p.id = long.Parse(e[0]); p.pos = StringToVector(e[1]); p.fwd = StringToVector(e[2]); p.up = StringToVector(e[3]);
+        list.Add(p);
+    }
+    dockPool = list;
+}
+
+// Called at the end of the path. Returns true when the ship may continue to ApproachDock.
+bool CheckDockClearance()
+{
+    if (!trafficEnabled || shipMode == ShipMode.Shuttle || homeConnId == 0) return true;
+    RequestDock(1);
+    if (!StationDeciding()) return true; // no station: ship-to-ship rules
+    if (!StationCleared(1)) { statusMessage = "Waiting for dock clearance"; return false; }
+    ApplyStationDock();
+    return true;
+}
+
+// Cleared: dock where the station says. Returns true when that changed the dock.
+bool ApplyStationDock()
+{
+    dockWaiting = false;
+    PoolDock pd = null;
+    if (stationConn != 0 && stationConn != homeConnId && dockRelSet)
+        for (int i = 0; i < dockPool.Count; i++) if (dockPool[i].id == stationConn) pd = dockPool[i];
+    long want = pd == null ? 0 : pd.id;
+    if (want == poolDockId && (want == 0) == (poolDock == null)) return false;
+    poolDockId = want;
+    poolDock = pd == null ? null : DockPose(pd.pos, pd.fwd, pd.up);
+    return true;
+}
+
+bool InDockZone(Vector3 p)
+{
+    for (int i = 0; i < zoneCenters.Count; i++) if (Vector3.Distance(p, zoneCenters[i]) < zoneRadii[i] + shipDiameter * 0.75f) return true;
+    return false;
+}
+
+// FlyToDockArea, every tick: ask for clearance when close to the home dock. Returns true while the
+// ship has to wait outside the docking area (the waypoint it flies to, or the next one, is inside).
+bool HoldForDockArea(Vector3 cur, Vector3 next)
+{
+    dockQueued = false;
+    if (!trafficEnabled || shipMode == ShipMode.Shuttle || homeConnId == 0) return false;
+    if (dockRequestKind != 1 && Vector3.Distance(shipPosition, homeDock.position) > dockRequestDistance) return false;
+    RequestDock(1);
+    if (!StationHandlesMe() || StationCleared(1) || zoneCenters.Count == 0) return false;
+    if (!InDockZone(cur) && !InDockZone(next) && !InDockZone(shipPosition)) return false;
+    dockQueued = true;
+    return true;
+}
+
+// Called before undocking. Returns true when the ship may undock now.
+bool CheckUndockClearance()
+{
+    if (!trafficEnabled || shipMode == ShipMode.Shuttle || homeConnId == 0) return true;
+    RequestDock(2);
+    if (!StationDeciding()) return true;
+    if (!StationCleared(2)) { statusMessage = "Waiting for undock clearance"; return false; }
+    return true;
 }

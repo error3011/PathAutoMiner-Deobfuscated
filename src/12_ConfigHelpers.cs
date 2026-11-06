@@ -120,6 +120,10 @@ void AdvanceHole(bool previous)
 {
     if (previous) currentHoleIndex = Math.Max(0, currentHoleIndex - 1);
     else currentHoleIndex++;
+    // co-op record: holes before the new one count as finished, the rest as not finished
+    EnsureHoleOrder(); EnsureDoneHoles();
+    for (int k = 0; k < holeCells.Count && k < doneHoles.Length; k++) SetHoleDone(holeCells[k], k < currentHoleIndex);
+    myHole = -1;
     UpdateProgress(true);
 }
 

@@ -38,6 +38,7 @@ WaypointInfo DockPose(Vector3 pos, Vector3 fwd, Vector3 up)
 int DockPhase()
 {
     NavState s = currentNavState;
+    if (s == NavState.Idle) return FindConnector(MyShipConnectorStatus.Connected) != null ? 3 : 0; // idle but docked still holds the connector
     if (s == NavState.Docking || s == NavState.Unloading || s == NavState.Charging || s == NavState.WaitUranium ||
         s == NavState.FillHydrogen || s == NavState.Undocking) return 3;
     if (s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.RetryDocking) return 2;
@@ -45,7 +46,12 @@ int DockPhase()
     return 0;
 }
 
-long ClaimedDockId() { return DockPhase() == 0 ? 0 : (poolDock != null ? poolDockId : homeConnId); }
+long ClaimedDockId()
+{
+    if (DockPhase() == 0) return 0;
+    if (StationCleared(1) && stationConn != 0) return stationConn;
+    return poolDock != null ? poolDockId : homeConnId;
+}
 
 // While docked: learn the pose relative to the base connector and the list of pool connectors.
 void LearnDocks()

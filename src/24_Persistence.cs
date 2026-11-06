@@ -62,9 +62,9 @@ String BuildSaveData()
     AppendStorage(";");
     for (int i = 0; i < waypoints.Count; i++)
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
-    // section 5 (co-op rows) was added after 1.3.1; older saves simply don't have it
+    // section 5 (co-op holes) was added after 1.3.1; older saves simply don't have it
     AppendStorage(";", false);
-    AppendStorage(doneRows + "|" + myRow, false);
+    AppendStorage(doneHoles + "|" + myHole, false);
     // section 6 (dock pool)
     AppendStorage(";", false);
     AppendStorage(DockPoolToString(), false);
@@ -167,8 +167,9 @@ DataResult RestoreFrom(String data)
                 waypoints.Add(StringToWaypoint(SafeElement(lines, i)));
 
         lines = SafeElement(sections, 5).Split('|');
-        doneRows = SafeElement(lines, 0);
-        if (!int.TryParse(SafeElement(lines, 1), out myRow)) myRow = -1;
+        doneHoles = SafeElement(lines, 0);
+        if (!int.TryParse(SafeElement(lines, 1), out myHole)) myHole = -1;
+        if (doneHoles.Length != jobWidth * jobHeight) { doneHoles = ""; myHole = -1; } // older save: rows, not holes
         DockPoolFromString(SafeElement(sections, 6));
     }
     catch { return DataResult.Failed; }

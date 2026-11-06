@@ -48,6 +48,7 @@ void ControllerMainLoop(string argument)
         }
     }
 
+    if (isTick) UpdateDockControl(); // station dock control (clearance for one ship at a time)
     UpdateControllerDisplays();
 }
 
@@ -189,6 +190,7 @@ void ScanControllerBlocks()
     lcdPanels = FilterByTag(lcdPanels, pamTag, true);
     SetupTaggedSurfaces(taggedBlocks);
     SetupDebugPanels();
+    ScanDockArea();
     SetLCDFormat(lcdPanels, setLCDFontAndSize, 1.15f, false);
     SetLCDFormat(textSurfaces, setLCDFontAndSize, 1.15f, true);
 
@@ -244,7 +246,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
     String thinSeparator = "--------------------------------------------\n";
 
     if (selectedShip == null || currentMenu == MenuPage.Main || currentMenu == MenuPage.SendCommandAll)
-        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n";
+        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n" + GetDockAreaLine();
     else text += GetShipStatusLine(selectedShip) + "\n";
     text += separator;
 

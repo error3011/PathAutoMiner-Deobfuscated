@@ -79,13 +79,12 @@ void UpdateNavigation()
             {
                 if (!coopWaiting) { coopWaiting = true; coopWaitPos = shipPosition; }
                 SetFlightTarget(coopWaitPos, 0);
-                statusMessage = "Waiting for a free row";
+                statusMessage = "Waiting for a free hole";
                 return;
             }
             coopWaiting = false;
-            bool jumped = claimed != currentHoleIndex;
-            if (jumped) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
-            SpiralResult result = GetNextHolePosition(currentHoleIndex, stateFirstTick || jumped);
+            if (claimed != currentHoleIndex) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
+            SpiralResult result = SetHolePosition(currentHoleIndex);
             if (result == SpiralResult.AllDone)
             {
                 jobState = JobState.Done;
@@ -105,6 +104,8 @@ void UpdateNavigation()
         }
         else
         {
+            // co-op: a ship with a lower id claimed this hole (or one next to it) at the same moment -> pick again
+            if (myHole >= 0 && HoleConflict(myHole, true)) { stuckCounter = 0; return; }
             if (distToTarget < wpReachedDist) { SetNavState(NavState.Mining); return; }
         }
     }
@@ -254,7 +255,11 @@ void UpdateNavigation()
             if (currentNavState == NavState.FlyToDockArea || shipMode == ShipMode.Shuttle)
             {
                 // dock pool: own home dock if free, else a free pool connector, else wait at the path end
-                if (shipMode != ShipMode.Shuttle) { poolDock = null; poolDockId = 0; dockWaiting = !ChooseDock(1); }
+                if (shipMode != ShipMode.Shuttle)
+                {
+                    if (StationCleared(1)) ApplyStationDock(); // station dock control: the dock it assigned
+                    else { poolDock = null; poolDockId = 0; dockWaiting = !ChooseDock(1); }
+                }
                 WaypointInfo dock = GetCurrentDock();
                 pathFollowData = new PathFollowData();
                 pathFollowData.target = dock;
@@ -309,11 +314,34 @@ void UpdateNavigation()
             currentPathWaypoint = null;
         }
 
-        if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick)
+        if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick && !StationHandlesMe())
         {
             WaypointInfo before = GetCurrentDock();
             dockWaiting = !ChooseDock(1);
             if (GetCurrentDock() != before) { SetNavState(NavState.FlyToDockArea); return; }
+        }
+
+        // station dock control: cleared -> fly to the connector it assigned
+        if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick && StationCleared(1) && ApplyStationDock())
+        { SetNavState(NavState.FlyToDockArea); return; }
+
+        // station dock control: wait outside the docking area until cleared, turned towards the dock
+        bool inDockZone = false;
+        if (currentNavState == NavState.FlyToDockArea && !stateFirstTick && pathWaypointIndex >= 0 && pathWaypointIndex < waypoints.Count)
+        {
+            Vector3 cur = waypoints[pathWaypointIndex].position + GetLaneOffset(pathWaypointIndex, pathDirection);
+            int nextIdx = pathWaypointIndex + pathDirection;
+            Vector3 next = pathDirection != 0 && nextIdx >= 0 && nextIdx < waypoints.Count ? waypoints[nextIdx].position : pathFollowData.target.position;
+            if (HoldForDockArea(cur, next))
+            {
+                if (!dockHoldSet) { dockHoldSet = true; dockHoldPos = InDockZone(cur) ? shipPosition : cur; }
+                SetFlightTarget(dockHoldPos, 0);
+                AlignToDown(pathFollowData.target.downDir, pathFollowData.target.forwardDir, pathFollowData.target.leftDir, false);
+                statusMessage = "Waiting for dock clearance";
+                return;
+            }
+            dockHoldSet = false;
+            inDockZone = StationCleared(1) && (InDockZone(shipPosition) || InDockZone(next));
         }
 
         CalculatePathSpeeds(waypoints, pathDirection, pathFollowData.targetPositions, pathFollowData.directFlyDist, stateFirstTick, ref stuckCounter);
@@ -324,6 +352,7 @@ void UpdateNavigation()
             if (dist <= pathFollowData.directFlyDist) reachedEnd = true;
             if (dist <= pathFollowData.useDockDirDist) useDockDir = true;
         }
+        if (inDockZone) useDockDir = true; // cleared: keep the dock orientation and approach speed inside the docking area
         if (useDockDir) approachSpeed = pathFollowData.approachSpeed;
 
         float wpSpeed = currentPathWaypoint != null ? currentPathWaypoint.maxSpeed : shipSpeed;
@@ -362,6 +391,8 @@ void UpdateNavigation()
         if (reachedEnd)
         {
             waypointsRemaining = 0;
+            // station dock control: wait at the path end until the station clears this ship
+            if (currentNavState == NavState.FlyToDockArea && !CheckDockClearance()) { SetFlightTarget(navTargetPos, 0); return; }
             if (currentNavState == NavState.FlyToDockArea && dockWaiting)
             { SetFlightTarget(navTargetPos, 0); statusMessage = "Waiting for a free dock"; return; }
             if (currentNavState == NavState.FlyToDockArea || shipMode == ShipMode.Shuttle) { SetNavState(NavState.ApproachDock); return; }
@@ -373,7 +404,12 @@ void UpdateNavigation()
     // [ApproachDock / RetryDocking] -> approach connector
     if (currentNavState == NavState.ApproachDock || currentNavState == NavState.RetryDocking)
     {
-        if (shipMode != ShipMode.Shuttle)
+        if (shipMode != ShipMode.Shuttle && StationHandlesMe())
+        {
+            // station dock control: lost the clearance (timeout) -> back to the path end and wait
+            if (!StationCleared(1)) { SetNavState(NavState.FlyToDockArea); return; }
+        }
+        else if (shipMode != ShipMode.Shuttle)
         {
             // dock pool: a ship already docking/docked there has priority -> back to the path end
             WaypointInfo before = GetCurrentDock();
@@ -589,8 +625,17 @@ void UpdateNavigation()
     // [Undocking] -> disconnect and fly away from dock
     if (currentNavState == NavState.Undocking)
     {
+        // station dock control: stay docked until the station clears the undock
+        if (waitUndockClearance)
+        {
+            if (!CheckUndockClearance()) return;
+            waitUndockClearance = false;
+            SetNavState(NavState.Undocking);
+            return;
+        }
         if (stateFirstTick)
         {
+            if (!CheckUndockClearance()) { waitUndockClearance = true; return; }
             IMyShipConnector connected = FindConnector(MyShipConnectorStatus.Connected);
             if (connected == null) { SetNavState(NavState.FlyToJobArea); return; }
             IMyShipConnector other = connected.OtherConnector;

@@ -1,0 +1,220 @@
+// ========================== DOCK CONTROL (station, [PAM-Controller] PB) ==========================
+// The controller PB on the station runs the docking area: it reads the real status of the
+// station's connectors (catches idle PAM ships and non-PAM ships), watches the docking area with
+// [PAM-Zone] sensors and each connector's approach lane with a [PAM-Lane] camera, and clears one
+// ship at a time to move in the area. Undocking is cleared before docking, so a full dock area
+// can't jam. A station only answers ships whose home connector is on its own grid.
+
+const String DOCK_TAG = "[PAMDCK]";
+const float CLEARANCE_TIMEOUT = 120f; //[s] a cleared ship that doesn't finish loses its clearance
+
+class DockRequest
+{
+    public long ship;
+    public int kind; // 1 = dock, 2 = undock
+    public long home;
+    public bool canUsePool;
+    public DateTime first, last;
+}
+
+IMyBroadcastListener dockListener = null;
+List<DockRequest> dockRequests = new List<DockRequest>();
+List<IMyShipConnector> stationDocks = new List<IMyShipConnector>();
+List<IMySensorBlock> zoneSensors = new List<IMySensorBlock>();
+List<IMyCameraBlock> laneCameras = new List<IMyCameraBlock>();
+List<MyDetectedEntityInfo> zoneSeen = new List<MyDetectedEntityInfo>();
+long clearedShip = 0;
+int clearedKind = 0;
+long clearedConn = 0;
+DateTime clearedSince = DateTime.Now;
+String dockAreaStatus = "";
+int dockSendTick = 0;
+IMyCubeGrid stationGrid = null;
+
+void ScanDockArea()
+{
+    stationGrid = Me.CubeGrid;
+    gridTerminalSystem.GetBlocksOfType(stationDocks, q => q.CubeGrid.IsSameConstructAs(stationGrid) && q.CustomName.Contains(dockPoolTag));
+    gridTerminalSystem.GetBlocksOfType(zoneSensors, q => q.CubeGrid.IsSameConstructAs(stationGrid) && q.CustomName.Contains(zoneTag));
+    gridTerminalSystem.GetBlocksOfType(laneCameras, q => q.CubeGrid.IsSameConstructAs(stationGrid) && q.CustomName.Contains(laneTag));
+    for (int i = 0; i < zoneSensors.Count; i++) { zoneSensors[i].DetectSmallShips = true; zoneSensors[i].DetectLargeShips = true; }
+    for (int i = 0; i < laneCameras.Count; i++) laneCameras[i].EnableRaycast = true;
+}
+
+IMyShipConnector StationConnector(long id)
+{
+    if (id == 0) return null;
+    IMyShipConnector c = gridTerminalSystem.GetBlockWithId(id) as IMyShipConnector;
+    return c != null && stationGrid != null && c.CubeGrid.IsSameConstructAs(stationGrid) ? c : null;
+}
+
+bool IsDockFree(IMyShipConnector c)
+{
+    return c != null && c.IsFunctional && c.Enabled && c.Status == MyShipConnectorStatus.Unconnected;
+}
+
+// Raycast the approach lane of a connector with the [PAM-Lane] camera next to it (within 10 m).
+bool IsLaneClear(IMyShipConnector c, long ship)
+{
+    for (int i = 0; i < laneCameras.Count; i++)
+    {
+        IMyCameraBlock cam = laneCameras[i];
+        if (!cam.IsWorking || Vector3D.Distance(cam.GetPosition(), c.GetPosition()) > 10) continue;
+        Vector3D end = cam.GetPosition() + c.WorldMatrix.Forward * dockLaneLength;
+        if (!cam.CanScan(end)) continue; // camera not facing along the lane, or charging
+        MyDetectedEntityInfo hit = cam.Raycast(end);
+        if (!hit.IsEmpty() && hit.EntityId != stationGrid.EntityId && hit.EntityId != ship && hit.Type != MyDetectedEntityType.FloatingObject)
+        { dockAreaStatus = "Lane blocked: " + c.CustomName; return false; }
+    }
+    return true;
+}
+
+// Something moving in the docking area that isn't the cleared ship?
+bool IsZoneBusy()
+{
+    for (int s = 0; s < zoneSensors.Count; s++)
+    {
+        if (!zoneSensors[s].IsWorking) continue;
+        zoneSeen.Clear();
+        zoneSensors[s].DetectedEntities(zoneSeen);
+        for (int i = 0; i < zoneSeen.Count; i++)
+        {
+            MyDetectedEntityInfo e = zoneSeen[i];
+            bool grid = e.Type == MyDetectedEntityType.SmallGrid || e.Type == MyDetectedEntityType.LargeGrid;
+            if (grid && e.EntityId != clearedShip && e.Velocity.Length() > 0.5f)
+            { dockAreaStatus = "Ship moving in dock area: " + e.Name; return true; }
+        }
+    }
+    return false;
+}
+
+long PickDock(DockRequest r)
+{
+    IMyShipConnector home = StationConnector(r.home);
+    if (IsDockFree(home) && IsLaneClear(home, r.ship)) return home.EntityId;
+    if (!r.canUsePool || home == null) return 0; // home removed: the pool poses are relative to it
+    IMyShipConnector best = null;
+    double bestDist = 0;
+    for (int i = 0; i < stationDocks.Count; i++)
+    {
+        IMyShipConnector c = stationDocks[i];
+        if (!IsDockFree(c)) continue;
+        double d = Vector3D.Distance(c.GetPosition(), home.GetPosition());
+        if (best == null || d < bestDist) { if (IsLaneClear(c, r.ship)) { best = c; bestDist = d; } }
+    }
+    return best == null ? 0 : best.EntityId;
+}
+
+void GrantNext()
+{
+    DockRequest pick = null;
+    long conn = 0;
+    for (int pass = 2; pass >= 1 && pick == null; pass--)
+    {
+        DockRequest oldest = null;
+        for (int i = 0; i < dockRequests.Count; i++)
+        {
+            DockRequest r = dockRequests[i];
+            if (r.kind != pass) continue;
+            if (pass == 1)
+            {
+                long c = PickDock(r);
+                if (c == 0) continue;
+                if (oldest == null || r.first < oldest.first) { oldest = r; conn = c; }
+            }
+            else if (oldest == null || r.first < oldest.first) oldest = r;
+        }
+        pick = oldest;
+    }
+    if (pick == null) { if (dockRequests.Count > 0 && dockAreaStatus == "") dockAreaStatus = "No free dock"; return; }
+    clearedShip = pick.ship;
+    clearedKind = pick.kind;
+    clearedConn = pick.kind == 1 ? conn : 0;
+    clearedSince = DateTime.Now;
+}
+
+void UpdateDockControl()
+{
+    if (stationGrid == null) return; // first block scan not done yet
+    if (dockListener == null) dockListener = IGC.RegisterBroadcastListener(DOCK_TAG);
+    int budget = 30;
+    while (dockListener.HasPendingMessage && budget-- > 0)
+    {
+        String data = dockListener.AcceptMessage().Data as String;
+        if (data != null) HandleDockMessage(data);
+    }
+    RunDockControl();
+    if (++dockSendTick < 3) return; // ~2 per second
+    dockSendTick = 0;
+    IGC.SendBroadcastMessage(DOCK_TAG, BuildStationMessage());
+}
+
+void HandleDockMessage(String data)
+{
+    try
+    {
+        String[] f = data.Split(';');
+        long ship = long.Parse(f[1]);
+        if (f[0] == "D")
+        {
+            for (int i = dockRequests.Count - 1; i >= 0; i--) if (dockRequests[i].ship == ship) dockRequests.RemoveAt(i);
+            if (clearedShip == ship) clearedShip = 0;
+        }
+        else if (f[0] == "R" && f.Length >= 5)
+        {
+            long home = long.Parse(f[3]);
+            if (StationConnector(home) == null) return; // that ship's home is not on this station
+            DockRequest r = null;
+            for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == ship) r = dockRequests[i];
+            if (r == null) { r = new DockRequest(); r.ship = ship; r.first = DateTime.Now; dockRequests.Add(r); }
+            int kind = int.Parse(f[2]);
+            if (r.kind != kind) r.first = DateTime.Now;
+            r.kind = kind; r.home = home; r.canUsePool = f[4] == "1"; r.last = DateTime.Now;
+        }
+    }
+    catch { }
+}
+
+void RunDockControl()
+{
+    for (int i = dockRequests.Count - 1; i >= 0; i--)
+        if ((DateTime.Now - dockRequests[i].last).TotalSeconds > 3) dockRequests.RemoveAt(i);
+    DockRequest cleared = null;
+    for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == clearedShip) cleared = dockRequests[i];
+    if (clearedShip != 0 && cleared == null) clearedShip = 0;
+    if (cleared != null && (DateTime.Now - clearedSince).TotalSeconds > CLEARANCE_TIMEOUT)
+    { clearedShip = 0; cleared.first = DateTime.Now; } // too slow: back of the queue
+    dockAreaStatus = "";
+    if (clearedShip == 0 && dockRequests.Count > 0 && !IsZoneBusy()) GrantNext();
+}
+
+String BuildStationMessage()
+{
+    String msg = "S;" + stationGrid.EntityId + ";" + clearedShip + ";" + clearedKind + ";" + clearedConn + ";";
+    for (int i = 0; i < dockRequests.Count; i++) msg += (i > 0 ? "," : "") + dockRequests[i].ship;
+    msg += ";";
+    for (int i = 0; i < stationDocks.Count; i++)
+    {
+        IMyShipConnector c = stationDocks[i];
+        msg += (i > 0 ? ":" : "") + c.EntityId + "," + VectorToString(c.GetPosition()) + "," + VectorToString(c.WorldMatrix.Forward) + "," + VectorToString(c.WorldMatrix.Up);
+    }
+    // docking area: a sphere around each [PAM-Zone] sensor that contains its whole detection box
+    // (whichever way the sensor faces); ships wait outside it
+    msg += ";";
+    for (int i = 0; i < zoneSensors.Count; i++)
+    {
+        IMySensorBlock z = zoneSensors[i];
+        double r = new Vector3D(Math.Max(z.LeftExtend, z.RightExtend), Math.Max(z.TopExtend, z.BottomExtend), Math.Max(z.FrontExtend, z.BackExtend)).Length();
+        msg += (i > 0 ? ":" : "") + VectorToString(z.GetPosition()) + "," + Math.Round(r, 1);
+    }
+    return msg;
+}
+
+String GetDockAreaLine()
+{
+    if (stationDocks.Count == 0 && zoneSensors.Count == 0) return "";
+    int free = 0;
+    for (int i = 0; i < stationDocks.Count; i++) if (IsDockFree(stationDocks[i])) free++;
+    return "Docks: " + free + "/" + stationDocks.Count + " free" + (clearedShip != 0 ? (clearedKind == 1 ? " | docking" : " | undocking") : "") +
+        (dockRequests.Count > 1 ? " | " + (dockRequests.Count - 1) + " waiting" : "") + (dockAreaStatus != "" ? "\n" + dockAreaStatus : "") + "\n";
+}

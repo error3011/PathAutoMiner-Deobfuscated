@@ -1,12 +1,12 @@
 // ========================== TRAFFIC & CO-OP MINING ==========================
 // PAM ships share a small, frequent traffic message (own IGC tag, independent of the controller
-// protocol and of Broadcast_Channel): position, velocity, size, job and the row of holes they
+// protocol and of Broadcast_Channel): position, velocity, size, job and the hole they
 // work on. It is used for:
 //  - lanes: on the recorded path, ships keep right of it by laneOffset (tapering to the path
 //    near both ends), so ships going opposite ways pass side by side
 //  - spacing: slow down / hold behind a PAM ship ahead; keep right when one comes head-on
-//  - co-op mining: ships on the same job (IMPORT JOB) claim rows of holes, skip rows other
-//    ships are on or right next to, and share which rows are finished
+//  - co-op mining: ships on the same job (IMPORT JOB) claim single holes, skip holes other
+//    ships have or are too close to, and share which holes are finished
 
 const String TRAFFIC_TAG = "[PAMTFC]";
 const float TRAFFIC_TIMEOUT = 5f; //[s] forget ships not heard from for this long
@@ -16,9 +16,11 @@ class TrafficShip
 {
     public long id;
     public Vector3 pos, vel;
+    public Vector3 heading;  // direction to its flight target (zero when it isn't avoiding traffic)
     public float diameter;
     public String job = "";
-    public int row = -1;
+    public int hole = -1;  // co-op: grid cell it claims
+    public bool queued;    // holding outside the docking area for station clearance
     public long dock = 0;  // dock pool: connector this ship uses or heads for
     public int dockPhase = 0;
     public DateTime time;
@@ -29,9 +31,14 @@ long myGridId = 0;
 List<TrafficShip> traffic = new List<TrafficShip>();
 Vector3 trafficShift = new Vector3();
 float trafficSpeedLimit = -1; // -1 = no limit
+Vector3 trafficHeading = new Vector3();
+bool trafficHolding = false;
+DateTime trafficHoldSince = DateTime.Now;
+const float TRAFFIC_STUCK_TIME = 15f;  //[s] held by traffic this long -> stop waiting and pass on the right
+const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
 int trafficTick = 0;
-String doneRows = "";         // one char per row of holes: '1' = finished (by any co-op ship)
-int myRow = -1;               // row this ship is working on
+String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
+int myHole = -1;              // grid cell of the hole this ship works on
 bool coopWaiting = false;
 Vector3 coopWaitPos = new Vector3();
 
@@ -56,12 +63,14 @@ void UpdateTraffic()
     for (int i = traffic.Count - 1; i >= 0; i--)
         if ((DateTime.Now - traffic[i].time).TotalSeconds > TRAFFIC_TIMEOUT) traffic.RemoveAt(i);
 
-    if (currentNavState == NavState.Idle || ++trafficTick < 3) return; // ~2 messages per second
+    // idle ships send too while docked, so their connector counts as taken
+    if (++trafficTick < 3) return; // ~2 messages per second
+    if (currentNavState == NavState.Idle && FindConnector(MyShipConnectorStatus.Connected) == null) return;
     trafficTick = 0;
-    bool inJob = currentNavState == NavState.FlyToXY || currentNavState == NavState.Mining || currentNavState == NavState.Returning;
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
-        (inJob ? myRow : -1) + ";" + doneRows + ";" + ClaimedDockId() + "," + DockPhase());
+        (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
+        ";" + (dockQueued ? 1 : 0));
 }
 
 void ParseTraffic(String data)
@@ -79,9 +88,9 @@ void ParseTraffic(String data)
         ship.vel = StringToVector(f[2]);
         ship.diameter = float.Parse(f[3]);
         ship.job = f[4];
-        ship.row = int.Parse(f[5]);
+        ship.hole = int.Parse(f[5]);
         ship.time = DateTime.Now;
-        if (ship.job != "" && ship.job == JobKey()) MergeDoneRows(f[6]);
+        if (ship.job != "" && ship.job == JobKey()) MergeDoneHoles(f[6]);
         ship.dock = 0; ship.dockPhase = 0;
         if (f.Length >= 8)
         {
@@ -89,6 +98,8 @@ void ParseTraffic(String data)
             ship.dock = long.Parse(d[0]);
             ship.dockPhase = int.Parse(d[1]);
         }
+        ship.heading = f.Length >= 9 ? StringToVector(f[8]) : new Vector3();
+        ship.queued = f.Length >= 10 && f[9] == "1";
     }
     catch { } // malformed message from another script: ignore
 }
@@ -120,106 +131,226 @@ Vector3 GetLaneOffset(int idx, int pathDir)
 
 // ---- spacing ----
 
+Vector3 trafficMyVel = new Vector3();
+
+// Docking, undocking and backing out of a hole: traffic only slows/holds the ship, no side step
+// (the ship has to stay on its line to the connector or hole).
+bool IsPreciseFlightState(NavState s)
+{
+    return s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.Docking || s == NavState.RetryDocking ||
+        s == NavState.Undocking || s == NavState.Returning || s == NavState.AlignJob;
+}
+
 void UpdateTrafficAvoidance()
 {
     trafficShift = new Vector3();
     trafficSpeedLimit = -1;
-    if (!trafficEnabled || traffic.Count == 0 || !IsFreeFlightState(currentNavState)) return;
-    ComputeTrafficAvoidance(remoteControl.GetNaturalGravity());
+    trafficHeading = new Vector3();
+    bool free = IsFreeFlightState(currentNavState);
+    if (!trafficEnabled || (!free && !IsPreciseFlightState(currentNavState))) { trafficHolding = false; return; }
+    trafficMyVel = remoteControl.GetShipVelocities().LinearVelocity;
+    ComputeTrafficAvoidance(remoteControl.GetNaturalGravity(), !free);
 }
 
-void ComputeTrafficAvoidance(Vector3 gravity)
+void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
 {
+    trafficShift = new Vector3();
+    trafficSpeedLimit = -1;
     Vector3 toTarget = navTargetPos - shipPosition;
     float targetDist = toTarget.Length();
-    if (targetDist < 1f) return;
-    Vector3 dir = toTarget / targetDist;
+    bool haveDir = targetDist >= 1f;
+    Vector3 dir = haveDir ? toTarget / targetDist : new Vector3();
+    trafficHeading = dir; // sent to the other ships: lets them tell head-on from following, even when stopped
     Vector3 up = gravity.LengthSquared() > 0.01f ? -Vector3.Normalize(gravity) : -downDirection;
     Vector3 right = Vector3.Cross(dir, up);
     right = right.LengthSquared() < 0.0001f ? -leftDirection : Vector3.Normalize(right);
+    TrafficShip limiter = null;
 
     for (int i = 0; i < traffic.Count; i++)
     {
         TrafficShip other = traffic[i];
+        if (other.dockPhase == 3 && other.vel.LengthSquared() < 0.25f) continue; // parked at a connector
         Vector3 pos = other.pos + other.vel * (float)(DateTime.Now - other.time).TotalSeconds;
         Vector3 rel = pos - shipPosition;
-        float along = Vector3.Dot(rel, dir);
-        if (along <= 0) continue; // behind
         float clear = (shipDiameter + other.diameter) * 0.5f;
-        if ((rel - dir * along).Length() > clear * 1.2f) continue; // not in my corridor
-        float otherAlong = Vector3.Dot(other.vel, dir);
-        if (otherAlong < -1f)
+        float along = haveDir ? Vector3.Dot(rel, dir) : 0;
+        if (along > 0 && (rel - dir * along).Length() <= clear * 1.2f)
         {
-            // head-on: both ships see each other as oncoming and both keep right
-            if (along < (shipSpeed - otherAlong) * 6f + clear * 4f) trafficShift = right * clear * 1.3f;
-        }
-        else
-        {
-            // same direction or stopped: follow at a distance, hold if it stops
+            // in my corridor, ahead
+            float otherAlong = Vector3.Dot(other.vel, dir);
+            bool hasHeading = other.heading.LengthSquared() > 0.25f;
+            bool headOn = otherAlong < -1f || (hasHeading && Vector3.Dot(other.heading, dir) < -0.5f);
+            if (precise)
+            {
+                if (headOn && myGridId < other.id) continue; // the other ship gives way
+            }
+            else
+            {
+                if (other.queued && !dockQueued)
+                {
+                    // a ship waiting outside the docking area: pass it (when queueing too, line up behind it)
+                    trafficShift = right * clear * 1.3f;
+                    continue;
+                }
+                if (headOn)
+                {
+                    // head-on (also when both are slow or stopped): both keep right and pass
+                    if (along < (shipSpeed - otherAlong) * 6f + clear * 4f) trafficShift = right * clear * 1.3f;
+                    continue;
+                }
+                if (hasHeading && myGridId < other.id)
+                {
+                    // does the other ship have me ahead in its corridor too (crossing paths)? then one
+                    // of us has to go: the lower id goes, keeping right, the other one waits
+                    Vector3 back = -rel;
+                    float otherAhead = Vector3.Dot(back, other.heading);
+                    if (otherAhead > 0 && (back - other.heading * otherAhead).Length() <= clear * 1.2f)
+                    { trafficShift = right * clear * 1.3f; continue; }
+                }
+            }
+            // same direction, or a ship that isn't moving on its own: follow at a distance, hold if it stops
             float gap = along - clear - followGap * shipDiameter;
             float limit = Math.Max(0, otherAlong) + Math.Max(0, gap) / FOLLOW_TIME;
-            if (trafficSpeedLimit < 0 || limit < trafficSpeedLimit) trafficSpeedLimit = limit;
+            if (headOn) limit = Math.Max(0, gap + Math.Min(0, otherAlong) * FOLLOW_TIME * 2) / FOLLOW_TIME; // it comes towards me: stop early
+            if (trafficSpeedLimit < 0 || limit < trafficSpeedLimit) { trafficSpeedLimit = limit; limiter = other; }
+            continue;
         }
+        // any other moving ship on a collision course (crossing, from the side or from behind):
+        // the higher id stops; both stop when it's close
+        if (other.vel.LengthSquared() < 1f) continue;
+        if (haveDir && (rel - dir * along).Length() <= clear * 1.2f) continue; // behind me in my lane: it has to slow down, not me
+        Vector3 rv = other.vel - trafficMyVel;
+        float rv2 = rv.LengthSquared();
+        if (rv2 < 0.25f) continue;
+        float t = -Vector3.Dot(rel, rv) / rv2;
+        if (t <= 0 || t > 5f || (rel + rv * t).Length() >= clear * 1.1f) continue;
+        if (myGridId > other.id || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
     }
+
+    // safety net: held by traffic for too long -> stop waiting for a while and pass on the right
+    // (not while docking or in a hole, and not in the queue outside the docking area)
+    bool held = trafficSpeedLimit >= 0 && trafficSpeedLimit < 0.5f;
+    if (!held || precise || (limiter != null && limiter.queued && dockQueued)) { trafficHolding = false; return; }
+    if (!trafficHolding) { trafficHolding = true; trafficHoldSince = DateTime.Now; }
+    double heldFor = (DateTime.Now - trafficHoldSince).TotalSeconds;
+    if (heldFor > TRAFFIC_STUCK_TIME + TRAFFIC_ESCAPE_TIME) trafficHoldSince = DateTime.Now;
+    else if (heldFor > TRAFFIC_STUCK_TIME) { trafficSpeedLimit = -1; trafficShift = right * shipDiameter * 1.3f; statusMessage = "Traffic: passing a stuck ship"; }
 }
 
 // ---- co-op mining ----
+// Ships on the same job claim single holes. A claim is kept while the job runs (also while the
+// ship is away unloading), so a half-mined hole is never taken over. Holes too close to another
+// ship's hole (closer than the bigger ship's size) are skipped. Finished holes are shared.
 
-bool EnsureDoneRows()
+List<int> holeCells = new List<int>(); // mining order: grid cell (row * jobWidth + col) for each hole index
+String holeOrderKey = "";
+
+// Same order as GetNextHolePosition (top-left zigzag or centre spiral), all holes at once.
+void EnsureHoleOrder()
 {
-    if (doneRows.Length == Math.Max(0, jobHeight)) return false;
-    doneRows = new String('0', Math.Max(0, jobHeight));
-    myRow = -1;
+    String key = jobWidth + "|" + jobHeight + "|" + (int)jobStartPos;
+    if (key == holeOrderKey) return;
+    holeOrderKey = key;
+    holeCells.Clear();
+    int n = jobWidth * jobHeight;
+    if (jobStartPos == StartPosition.TopLeft)
+    {
+        for (int k = 0; k < n; k++)
+        {
+            int row = k / jobWidth;
+            holeCells.Add(row * jobWidth + (row % 2 == 0 ? k - row * jobWidth : jobWidth - 1 - (k - row * jobWidth)));
+        }
+        return;
+    }
+    int halfW = (int)Math.Ceiling(jobWidth / 2f), halfH = (int)Math.Ceiling(jobHeight / 2f);
+    int halfW2 = jobWidth / 2, halfH2 = jobHeight / 2;
+    int x = 0, y = 0, dx = 0, dy = -1, max = Math.Max(jobWidth, jobHeight);
+    for (int i = 0; i < max * max; i++)
+    {
+        if (-halfW < x && x <= halfW2 && -halfH < y && y <= halfH2) holeCells.Add((y - 1 + halfH) * jobWidth + (x - 1 + halfW));
+        if (x == y || (x < 0 && x == -y) || (x > 0 && x == 1 - y)) { int t = dx; dx = -dy; dy = t; }
+        x += dx; y += dy;
+    }
+}
+
+bool EnsureDoneHoles()
+{
+    int n = Math.Max(0, jobWidth * jobHeight);
+    if (doneHoles.Length == n) return false;
+    doneHoles = new String('0', n);
+    myHole = -1;
     return true;
 }
 
-void MergeDoneRows(String other)
+void MergeDoneHoles(String other)
 {
-    EnsureDoneRows();
-    if (other.Length != doneRows.Length) return;
-    char[] rows = doneRows.ToCharArray();
-    for (int i = 0; i < rows.Length; i++) if (other[i] == '1') rows[i] = '1';
-    doneRows = new String(rows);
+    EnsureDoneHoles();
+    if (other.Length != doneHoles.Length) return;
+    char[] h = doneHoles.ToCharArray();
+    for (int i = 0; i < h.Length; i++) if (other[i] == '1') h[i] = '1';
+    doneHoles = new String(h);
 }
 
-bool IsRowDone(int row) { return row >= 0 && row < doneRows.Length && doneRows[row] == '1'; }
+bool IsHoleDone(int cell) { return cell >= 0 && cell < doneHoles.Length && doneHoles[cell] == '1'; }
 
-void SetRowDone(int row)
+void SetHoleDone(int cell, bool done)
 {
-    if (row < 0 || row >= doneRows.Length) return;
-    char[] rows = doneRows.ToCharArray();
-    rows[row] = '1';
-    doneRows = new String(rows);
+    if (cell < 0 || cell >= doneHoles.Length) return;
+    char[] h = doneHoles.ToCharArray();
+    h[cell] = done ? '1' : '0';
+    doneHoles = new String(h);
 }
 
-bool IsRowClaimed(int row)
+// Another ship on this job has this hole, or one too close to it. keeping: the hole is already
+// ours, so only a ship with a lower id makes us give it up (two ships claimed at the same moment).
+bool HoleConflict(int cell, bool keeping)
 {
+    if (!trafficEnabled) return false;
     String key = JobKey();
     for (int i = 0; i < traffic.Count; i++)
-        if (traffic[i].job == key && traffic[i].row >= 0 && Math.Abs(traffic[i].row - row) <= 1) return true;
+    {
+        TrafficShip t = traffic[i];
+        if (t.job != key || t.hole < 0 || (keeping && t.id > myGridId)) continue;
+        float dc = Math.Abs(cell % jobWidth - t.hole % jobWidth) * toolWidth;
+        float dr = Math.Abs(cell / jobWidth - t.hole / jobWidth) * toolHeight;
+        if (t.hole == cell || Math.Sqrt(dc * dc + dr * dr) < Math.Max(shipDiameter, t.diameter) * 1.1f) return true;
+    }
     return false;
 }
 
-// Called before choosing hole idx. Returns the hole to mine, -1 to wait (the rows left are taken
-// by other ships), or an index past the end when every row is finished. A single ship gets its
-// holes in the original order.
+// Called before flying to hole idx (index in the mining order). Returns the hole index to mine,
+// -1 to wait (every hole left is taken or too close to another ship), or jobWidth * jobHeight
+// when every hole is finished. A single ship gets its holes in the original order.
 int ClaimHole(int idx)
 {
-    if (jobWidth < 1 || jobHeight < 1) return idx;
-    // no record yet (new job, or a job saved by an older version): rows before the current
-    // hole were mined in order, so count them as finished
-    if (EnsureDoneRows()) for (int r = 0; r < idx / jobWidth && r < jobHeight; r++) SetRowDone(r);
-    if (myRow >= 0 && idx >= (myRow + 1) * jobWidth) { SetRowDone(myRow); myRow = -1; }
-    int row = idx / jobWidth;
-    if (row == myRow && !IsRowDone(row)) return idx; // still inside my row
+    int n = jobWidth * jobHeight;
+    if (n < 1) return idx;
+    EnsureHoleOrder();
+    // no record yet (new job, or a job saved by an older version): holes before the current one
+    // were mined in order
+    if (EnsureDoneHoles()) for (int k = 0; k < idx && k < n; k++) SetHoleDone(holeCells[k], true);
+    if (myHole >= 0 && (idx >= n || holeCells[idx] != myHole)) { SetHoleDone(myHole, true); myHole = -1; } // moved on: finished
+    if (myHole >= 0 && !IsHoleDone(myHole) && !HoleConflict(myHole, true)) return idx;
+    myHole = -1;
     bool anyLeft = false;
-    for (int r = 0; r < jobHeight; r++)
+    for (int k = 0; k < n; k++)
     {
-        if (IsRowDone(r)) continue;
+        int c = holeCells[k];
+        if (IsHoleDone(c)) continue;
         anyLeft = true;
-        if (trafficEnabled && IsRowClaimed(r)) continue;
-        myRow = r;
-        return r == row ? idx : r * jobWidth;
+        if (HoleConflict(c, false)) continue;
+        myHole = c;
+        return k;
     }
-    return anyLeft ? -1 : jobWidth * jobHeight;
+    return anyLeft ? -1 : n;
+}
+
+// hole index -> holeCol/holeRow, like GetNextHolePosition
+SpiralResult SetHolePosition(int idx)
+{
+    EnsureHoleOrder();
+    if (idx < 0 || idx >= holeCells.Count) return SpiralResult.AllDone;
+    holeCol = holeCells[idx] % jobWidth;
+    holeRow = holeCells[idx] / jobWidth;
+    return SpiralResult.Found;
 }

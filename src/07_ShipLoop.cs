@@ -143,6 +143,7 @@ void ShipMainLoop(string argument)
                 downDirection = remoteControl.WorldMatrix.Down;
                 UpdatePathRecording();
                 UpdateTraffic();
+                UpdateDockClearance();
 
                 if (resumePending)
                 {

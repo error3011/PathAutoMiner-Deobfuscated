@@ -22,6 +22,13 @@ const String pamTag = "[PAM]";
 const String controllerTag = "[PAM-Controller]";
 const String dataTag = "[PAM-Data]"; //EXPORT/IMPORT use the Custom Data of the block with this tag
 const String dockPoolTag = "[PAM-Dock]"; //base connectors in the dock pool (used when the ship's own home dock is taken)
+
+//Station dock control (on the [PAM-Controller] PB at the station): one ship at a time is cleared to
+//move in the docking area. Ships wait at the end of their path until cleared.
+const String zoneTag = "[PAM-Zone]"; //sensor(s) covering the docking area: no clearance while another ship moves inside
+const String laneTag = "[PAM-Lane]"; //camera next to a connector, facing out along its approach: lane must be clear
+const float dockLaneLength = 40f;//[m] how far the lane cameras check in front of their connector
+const float dockRequestDistance = 300f;//[m] ships ask the station for clearance this close to their home dock, and wait outside the [PAM-Zone] sensor area
 //Tag for LCD's of cockpits and other blocks: [PAM:<lcdIndex>] e.g: [PAM:1]
 
 const int gyroSpeedSmall = 15; //[RPM] small ship
