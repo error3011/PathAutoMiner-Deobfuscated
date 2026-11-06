@@ -59,7 +59,8 @@ def concatenate(files, output_path):
 
 def minify(input_path, output_path, extra_args):
     """Run minify_pam.py on the combined file."""
-    cmd = [sys.executable, MINIFY_SCRIPT, input_path, "--output", output_path] + extra_args
+    cmd = [sys.executable, MINIFY_SCRIPT, input_path, "--output", output_path,
+           "--map", os.path.join(SCRIPT_DIR, "identifier_map.txt")] + extra_args
     print(f"\nMinifying: {os.path.basename(input_path)} -> {os.path.basename(output_path)}")
     result = subprocess.run(cmd, cwd=ROOT_DIR)
     return result.returncode

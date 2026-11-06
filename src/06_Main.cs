@@ -4,7 +4,19 @@ void Main(string argument, UpdateType updateSource)
 {
     try
     {
-        if (lastError != null) { HandleError(); PrintDisplays(); return; }
+        if (lastError != null)
+        {
+            // "RETRY" restarts the script after an exception without recompiling: stop all overrides and rescan.
+            if (argument.Trim().ToUpper() == "RETRY")
+            {
+                lastError = null;
+                firstRun = true;
+                scanPhase = 0;
+                if (shipMode != ShipMode.Controller) StopAll();
+                statusMessage = "Restarted after error";
+            }
+            else { HandleError(); PrintDisplays(); return; }
+        }
 
         isTick = (updateSource & UpdateType.Update10) != 0;
         if (isTick) tickCounter++;
@@ -15,7 +27,7 @@ void Main(string argument, UpdateType updateSource)
         {
             animCounter++;
             if (animCounter > 4) animCounter = 0;
-            scanCountdown = Math.Max(0, 10 - (DateTime.Now - lastScanTime).Seconds);
+            scanCountdown = (int)Math.Max(0, 10 - (DateTime.Now - lastScanTime).TotalSeconds);
         }
 
         if (argument != "") lastArgument = argument;

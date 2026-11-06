@@ -3,7 +3,8 @@
 void Save()
 {
     if (resetRequested || shipMode == ShipMode.Controller) { Storage = ""; return; }
-    Storage = DATAREV + ";";
+    saveBuffer.Clear();
+    saveBuffer.Append(DATAREV + ";");
     AppendStorage(VectorToString(referencePosition), false);
     AppendStorage(VectorToString(homeDock.forwardDir));
     AppendStorage(VectorToString(homeDock.leftDir));
@@ -31,9 +32,9 @@ void Save()
     if (shipMode == ShipMode.Shuttle)
     {
         AppendStorage((int)undockConfig1.trigger); AppendStorage(undockConfig1.delay);
-        AppendStorage(undockConfig1.elapsedDelay); AppendStorage(undockConfig1.dockTimerName); AppendStorage(undockConfig1.leaveTimerName);
+        AppendStorage(undockConfig1.elapsedDelay); AppendStorage(EscapeStored(undockConfig1.dockTimerName)); AppendStorage(EscapeStored(undockConfig1.leaveTimerName));
         AppendStorage((int)undockConfig2.trigger); AppendStorage(undockConfig2.delay);
-        AppendStorage(undockConfig2.elapsedDelay); AppendStorage(undockConfig2.dockTimerName); AppendStorage(undockConfig2.leaveTimerName);
+        AppendStorage(undockConfig2.elapsedDelay); AppendStorage(EscapeStored(undockConfig2.dockTimerName)); AppendStorage(EscapeStored(undockConfig2.leaveTimerName));
     }
     else
     {
@@ -54,6 +55,8 @@ void Save()
     AppendStorage(";");
     for (int i = 0; i < waypoints.Count; i++)
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
+    Storage = saveBuffer.ToString();
+    saveBuffer.Clear();
 }
 
 DataResult RestoreData()
@@ -101,13 +104,13 @@ DataResult RestoreData()
             undockConfig1.trigger = (UndockTrigger)int.Parse(SafeElement(lines, idx++));
             undockConfig1.delay = float.Parse(SafeElement(lines, idx++));
             undockConfig1.elapsedDelay = float.Parse(SafeElement(lines, idx++));
-            undockConfig1.dockTimerName = SafeElement(lines, idx++);
-            undockConfig1.leaveTimerName = SafeElement(lines, idx++);
+            undockConfig1.dockTimerName = UnescapeStored(SafeElement(lines, idx++));
+            undockConfig1.leaveTimerName = UnescapeStored(SafeElement(lines, idx++));
             undockConfig2.trigger = (UndockTrigger)int.Parse(SafeElement(lines, idx++));
             undockConfig2.delay = float.Parse(SafeElement(lines, idx++));
             undockConfig2.elapsedDelay = float.Parse(SafeElement(lines, idx++));
-            undockConfig2.dockTimerName = SafeElement(lines, idx++);
-            undockConfig2.leaveTimerName = SafeElement(lines, idx++);
+            undockConfig2.dockTimerName = UnescapeStored(SafeElement(lines, idx++));
+            undockConfig2.leaveTimerName = UnescapeStored(SafeElement(lines, idx++));
         }
         else
         {

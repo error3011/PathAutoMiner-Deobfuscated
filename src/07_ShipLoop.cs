@@ -8,15 +8,20 @@ void ShipMainLoop(string argument)
     if (setupErrorLevel <= 1 && !IsInternalMessage(argument))
         ProcessShipArgument(argument);
 
-    if (broadcastListener != null && broadcastListener.HasPendingMessage)
+    // Drain other ships' status broadcasts; handle at most one controller command per run
+    // (its echo in broadcastExtra is what the controller uses as the acknowledgement).
+    int msgBudget = 50;
+    while (broadcastListener != null && broadcastListener.HasPendingMessage && msgBudget-- > 0)
     {
         MyIGCMessage msg = broadcastListener.AcceptMessage();
-        String data = (string)msg.Data;
+        String data = msg.Data as String;
+        if (data == null) continue;
         String senderId = "";
         if (setupErrorLevel <= 1 && ParseBroadcastMessage(ref data, out senderId, out broadcastExtra) && senderId == BROADCAST_SELF_ID)
         {
             ProcessShipArgument(data);
             shouldBroadcast = true;
+            break;
         }
     }
 

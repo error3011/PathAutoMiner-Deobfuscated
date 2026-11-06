@@ -98,6 +98,26 @@ Edit files in `src/` and rebuild. The modular structure makes it easy to find an
 - **Menu/UI:** `11_MenuBuilder.cs`
 - **Save/Load format:** `24_Persistence.cs`
 
+**Check the result** (balanced braces, required identifiers, 100,000-character limit; exits non-zero on problems):
+
+```bash
+python tools/validate_minified.py PAM_Minified.cs
+```
+
+The minifier only renames identifiers the script itself declares, so game/.NET API names are never renamed, and its output is identical on every run.
+
+## Changes from the original 1.3.1
+
+Behaviour follows the original script (`PAM_ORIGINAL.cs`). Fixes on top of it:
+
+- **Controller** (`[PAM-Controller]` PB): ship list, ship detail, send-command menus, inventory view and per-LCD modes (`mode=main:<page>`, `mainX`, `menu`, `inventory`, `menu:<ship>`, `inventory:<ship>`) are fully ported.
+- **Weight limit on long paths:** the zero-gravity waypoint used by the max-weight calculation is a separate field again (it had been merged with path-following's current waypoint, which affected paths over ~100 waypoints).
+- **Broadcasts:** every queued message is processed each run (one per run fell behind with ~10+ ships); non-text IGC messages on the PAM tag are ignored instead of crashing; `;` in ship names, status or menu text no longer shifts the fields the controller reads.
+- **Saves:** timer block names containing `;` or line breaks no longer corrupt the saved data. The save format is unchanged, so existing saves still load. `Save()` builds the data with a `StringBuilder`.
+- **Errors:** after an exception, run the PB with the argument `RETRY` to restart without recompiling.
+- **Controller arguments:** `SEND` / `SENDALL` without a target or command show usage instead of crashing.
+- Scan interval uses total elapsed seconds (was the 0-59 seconds component).
+
 ## Identifier Map
 
 The minifier generates `tools/identifier_map.txt` which maps readable names to their minified equivalents. This is useful for debugging minified output:

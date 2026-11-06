@@ -243,6 +243,49 @@ def build_protected_set():
     protected.update({"q","i","j","e"})  # common lambda/loop vars that might collide
     return protected
 
+DECL_KEYWORD_BLOCK = {"new", "return", "else", "case", "goto", "throw", "in", "is", "as",
+                      "typeof", "await", "yield", "using", "namespace", "base", "this"}
+
+def find_declared_identifiers(code):
+    """Names the script itself declares (types, enum members, methods, fields, locals,
+    parameters, lambda parameters). Only these are safe to rename: anything else is an
+    API name (game or .NET) and renaming it silently breaks the build in-game."""
+    declared = set()
+    # modifiers would otherwise be taken for the type in "public float[] x"
+    code = re.sub(r'\b(?:public|private|protected|internal|static|readonly|const|override|virtual|'
+                  r'abstract|sealed|ref|out|params|partial)\b', ' ', code)
+    for m in re.finditer(r'\b(?:class|struct|enum|interface)\s+([A-Za-z_]\w*)', code):
+        declared.add(m.group(1))
+    # enum members
+    for m in re.finditer(r'\benum\s+\w+\s*\{([^}]*)\}', code):
+        for part in m.group(1).split(','):
+            name = part.split('=')[0].strip()
+            if re.match(r'^[A-Za-z_]\w*$', name):
+                declared.add(name)
+    # "Type name" followed by = ; , ( ) : fields, locals, parameters, methods, foreach vars
+    type_re = r'([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:<[^<>;(){}]*(?:<[^<>;(){}]*>[^<>;(){}]*)*>)?(?:\[[,\s]*\])*)'
+    for m in re.finditer(type_re + r'\s+([A-Za-z_]\w*)\s*(?:<[^<>;(){}]*>\s*)?(?=[=;,()]|\bin\b)', code):
+        type_tok = m.group(1).split('.')[0].split('<')[0]
+        if type_tok in DECL_KEYWORD_BLOCK:
+            continue
+        declared.add(m.group(2))
+    # further declarators: "int a = 0, b = 0;" / "float x, y;" / "Vector3 a, b, c;"
+    for m in re.finditer(type_re + r'\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)+)\s*;', code):
+        if m.group(1).split('.')[0].split('<')[0] in DECL_KEYWORD_BLOCK:
+            continue
+        for name in m.group(2).split(','):
+            declared.add(name.strip())
+    for m in re.finditer(r',\s*([A-Za-z_]\w*)\s*(?==[^=>]|;)', code):
+        declared.add(m.group(1))
+    # lambda parameters: x => ... and (a, b) => ...
+    for m in re.finditer(r'\b([A-Za-z_]\w*)\s*=>', code):
+        declared.add(m.group(1))
+    for m in re.finditer(r'\(([^()]*)\)\s*=>', code):
+        for part in m.group(1).split(','):
+            toks = part.split()
+            if toks: declared.add(toks[-1])
+    return declared
+
 def collapse_whitespace(code):
     """Aggressively collapse whitespace while keeping code valid."""
     lines = code.split('\n')
@@ -405,8 +448,10 @@ def minify(source_code):
     all_idents = find_identifiers(code)
     protected = build_protected_set()
     
-    # Filter to only user-defined identifiers
+    # Filter to only user-defined identifiers: must be declared in the script and not protected
+    declared = find_declared_identifiers(code)
     user_idents = set()
+    skipped_undeclared = set()
     for ident in all_idents:
         if ident in protected:
             continue
@@ -414,8 +459,11 @@ def minify(source_code):
             continue
         if len(ident) <= 1:
             continue
-        # Skip if it looks like a SE API call (PascalCase after .)
+        if ident not in declared:
+            skipped_undeclared.add(ident)
+            continue
         user_idents.add(ident)
+    minify.skipped_undeclared = skipped_undeclared
     
     # Step 4: Count frequency to assign shortest names to most common
     freq = {}
@@ -496,6 +544,9 @@ def main():
         print(f"Minified:  {mini_size:>8} chars ({mini_size // 1024} KB)")
         print(f"Ratio:     {ratio:>7.1f}%")
         print(f"Identifiers renamed: {len(mapping)}")
+        skipped = sorted(getattr(minify, 'skipped_undeclared', set()))
+        print(f"Kept (not declared in script, treated as API): {len(skipped)}")
+        if skipped: print("           " + ", ".join(skipped))
         print(f"SE limit:  100,000 chars -> {'OK' if mini_size < 100000 else 'TOO BIG'}")
 
 if __name__ == '__main__':

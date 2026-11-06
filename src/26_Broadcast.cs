@@ -9,7 +9,7 @@ void BroadcastShipState(String extra)
     if (!broadcastEnabled) return;
     String sep = "" + BROADCAST_SEP;
     String msg = VERSION + sep;
-    msg += shipName + sep;
+    msg += CleanField(shipName) + sep;
     msg += (int)shipMode + sep;
     msg += FormatFloat(shipPosition.X) + "" + sep;
     msg += FormatFloat(shipPosition.Y) + sep;
@@ -17,18 +17,22 @@ void BroadcastShipState(String extra)
     if (shipMode != ShipMode.Shuttle)
         msg += GetJobStateName(lastJobState) + (lastJobState == JobState.Active ? " " + Math.Round(jobProgress, 1) + "%" : "") + sep;
     else msg += GetJobStateName(lastJobState) + sep;
-    msg += statusMessage + sep;
+    msg += CleanField(statusMessage) + sep;
     msg += menuIndex + "" + sep;
-    msg += menuCacheText + sep;
+    msg += CleanField(menuCacheText) + sep;
     msg += currentVolume + sep;
     msg += maxVolume + sep;
     for (int i = 0; i < itemList.Count; i++)
     {
         if (itemList[i].location != ItemLocation.InCargo) continue;
-        msg += itemList[i].name + "/" + itemList[i].type + "/" + itemList[i].amount + sep;
+        msg += CleanField(itemList[i].name) + "/" + CleanField(itemList[i].type) + "/" + itemList[i].amount + sep;
     }
     SendBroadcast(msg, extra);
 }
+
+// Fields are ';'-separated with no escaping, so a ';' in a ship name, status or menu text would
+// shift every following field on the controller. Replace it before sending.
+String CleanField(String s) { return s == null ? "" : s.Replace(BROADCAST_SEP, ','); }
 
 void SendBroadcast(String msg, String extra) { SendBroadcastTo(msg, BROADCAST_SELF_ID, extra); }
 

@@ -100,8 +100,15 @@ WaypointInfo StringToWaypoint(String s)
     return wp;
 }
 
-void AppendStorage<T>(T value, bool newLine) { if (newLine) Storage += "\n"; Storage += value; }
+// Save() builds into this buffer and assigns Storage once (Storage += per value was quadratic on long paths).
+System.Text.StringBuilder saveBuffer = new System.Text.StringBuilder();
+void AppendStorage<T>(T value, bool newLine) { if (newLine) saveBuffer.Append('\n'); saveBuffer.Append(value); }
 void AppendStorage<T>(T value) { AppendStorage(value, true); }
+
+// Block names can contain the Storage separators (';' between sections, '\n' between values).
+// Escape them so a timer called e.g. "Dock;1" can't corrupt the save. Old saves contain neither token.
+String EscapeStored(String s) { return s.Replace("&", "&#38;").Replace(";", "&#59;").Replace("\n", "&#10;"); }
+String UnescapeStored(String s) { return s.Replace("&#10;", "\n").Replace("&#59;", ";").Replace("&#38;", "&"); }
 
 String SafeElement(String[] arr, int idx)
 {

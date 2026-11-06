@@ -607,7 +607,19 @@ void Main(string argument, UpdateType updateSource)
 {
     try
     {
-        if (lastError != null) { HandleError(); PrintDisplays(); return; }
+        if (lastError != null)
+        {
+            // "RETRY" restarts the script after an exception without recompiling: stop all overrides and rescan.
+            if (argument.Trim().ToUpper() == "RETRY")
+            {
+                lastError = null;
+                firstRun = true;
+                scanPhase = 0;
+                if (shipMode != ShipMode.Controller) StopAll();
+                statusMessage = "Restarted after error";
+            }
+            else { HandleError(); PrintDisplays(); return; }
+        }
 
         isTick = (updateSource & UpdateType.Update10) != 0;
         if (isTick) tickCounter++;
@@ -618,7 +630,7 @@ void Main(string argument, UpdateType updateSource)
         {
             animCounter++;
             if (animCounter > 4) animCounter = 0;
-            scanCountdown = Math.Max(0, 10 - (DateTime.Now - lastScanTime).Seconds);
+            scanCountdown = (int)Math.Max(0, 10 - (DateTime.Now - lastScanTime).TotalSeconds);
         }
 
         if (argument != "") lastArgument = argument;
@@ -670,15 +682,20 @@ void ShipMainLoop(string argument)
     if (setupErrorLevel <= 1 && !IsInternalMessage(argument))
         ProcessShipArgument(argument);
 
-    if (broadcastListener != null && broadcastListener.HasPendingMessage)
+    // Drain other ships' status broadcasts; handle at most one controller command per run
+    // (its echo in broadcastExtra is what the controller uses as the acknowledgement).
+    int msgBudget = 50;
+    while (broadcastListener != null && broadcastListener.HasPendingMessage && msgBudget-- > 0)
     {
         MyIGCMessage msg = broadcastListener.AcceptMessage();
-        String data = (string)msg.Data;
+        String data = msg.Data as String;
+        if (data == null) continue;
         String senderId = "";
         if (setupErrorLevel <= 1 && ParseBroadcastMessage(ref data, out senderId, out broadcastExtra) && senderId == BROADCAST_SELF_ID)
         {
             ProcessShipArgument(data);
             shouldBroadcast = true;
+            break;
         }
     }
 
@@ -4148,8 +4165,15 @@ WaypointInfo StringToWaypoint(String s)
     return wp;
 }
 
-void AppendStorage<T>(T value, bool newLine) { if (newLine) Storage += "\n"; Storage += value; }
+// Save() builds into this buffer and assigns Storage once (Storage += per value was quadratic on long paths).
+System.Text.StringBuilder saveBuffer = new System.Text.StringBuilder();
+void AppendStorage<T>(T value, bool newLine) { if (newLine) saveBuffer.Append('\n'); saveBuffer.Append(value); }
 void AppendStorage<T>(T value) { AppendStorage(value, true); }
+
+// Block names can contain the Storage separators (';' between sections, '\n' between values).
+// Escape them so a timer called e.g. "Dock;1" can't corrupt the save. Old saves contain neither token.
+String EscapeStored(String s) { return s.Replace("&", "&#38;").Replace(";", "&#59;").Replace("\n", "&#10;"); }
+String UnescapeStored(String s) { return s.Replace("&#10;", "\n").Replace("&#59;", ";").Replace("&#38;", "&"); }
 
 String SafeElement(String[] arr, int idx)
 {
@@ -4164,7 +4188,8 @@ String SafeElement(String[] arr, int idx)
 void Save()
 {
     if (resetRequested || shipMode == ShipMode.Controller) { Storage = ""; return; }
-    Storage = DATAREV + ";";
+    saveBuffer.Clear();
+    saveBuffer.Append(DATAREV + ";");
     AppendStorage(VectorToString(referencePosition), false);
     AppendStorage(VectorToString(homeDock.forwardDir));
     AppendStorage(VectorToString(homeDock.leftDir));
@@ -4192,9 +4217,9 @@ void Save()
     if (shipMode == ShipMode.Shuttle)
     {
         AppendStorage((int)undockConfig1.trigger); AppendStorage(undockConfig1.delay);
-        AppendStorage(undockConfig1.elapsedDelay); AppendStorage(undockConfig1.dockTimerName); AppendStorage(undockConfig1.leaveTimerName);
+        AppendStorage(undockConfig1.elapsedDelay); AppendStorage(EscapeStored(undockConfig1.dockTimerName)); AppendStorage(EscapeStored(undockConfig1.leaveTimerName));
         AppendStorage((int)undockConfig2.trigger); AppendStorage(undockConfig2.delay);
-        AppendStorage(undockConfig2.elapsedDelay); AppendStorage(undockConfig2.dockTimerName); AppendStorage(undockConfig2.leaveTimerName);
+        AppendStorage(undockConfig2.elapsedDelay); AppendStorage(EscapeStored(undockConfig2.dockTimerName)); AppendStorage(EscapeStored(undockConfig2.leaveTimerName));
     }
     else
     {
@@ -4215,6 +4240,8 @@ void Save()
     AppendStorage(";");
     for (int i = 0; i < waypoints.Count; i++)
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
+    Storage = saveBuffer.ToString();
+    saveBuffer.Clear();
 }
 
 DataResult RestoreData()
@@ -4262,13 +4289,13 @@ DataResult RestoreData()
             undockConfig1.trigger = (UndockTrigger)int.Parse(SafeElement(lines, idx++));
             undockConfig1.delay = float.Parse(SafeElement(lines, idx++));
             undockConfig1.elapsedDelay = float.Parse(SafeElement(lines, idx++));
-            undockConfig1.dockTimerName = SafeElement(lines, idx++);
-            undockConfig1.leaveTimerName = SafeElement(lines, idx++);
+            undockConfig1.dockTimerName = UnescapeStored(SafeElement(lines, idx++));
+            undockConfig1.leaveTimerName = UnescapeStored(SafeElement(lines, idx++));
             undockConfig2.trigger = (UndockTrigger)int.Parse(SafeElement(lines, idx++));
             undockConfig2.delay = float.Parse(SafeElement(lines, idx++));
             undockConfig2.elapsedDelay = float.Parse(SafeElement(lines, idx++));
-            undockConfig2.dockTimerName = SafeElement(lines, idx++);
-            undockConfig2.leaveTimerName = SafeElement(lines, idx++);
+            undockConfig2.dockTimerName = UnescapeStored(SafeElement(lines, idx++));
+            undockConfig2.leaveTimerName = UnescapeStored(SafeElement(lines, idx++));
         }
         else
         {
@@ -4397,6 +4424,7 @@ string GetInstructionInfo()
 void HandleError()
 {
     String text = "Error occurred! \nPlease copy this and paste it \nin the \"Bugs and issues\" discussion.\n" +
+        "Run with argument RETRY to restart.\n" +
         "Version: " + VERSION + "\n";
     SetLCDFormat(lcdPanels, setLCDFontAndSize, 0.9f, false);
     SetLCDFormat(textSurfaces, setLCDFontAndSize, 0.9f, true);
@@ -4439,7 +4467,7 @@ void BroadcastShipState(String extra)
     if (!broadcastEnabled) return;
     String sep = "" + BROADCAST_SEP;
     String msg = VERSION + sep;
-    msg += shipName + sep;
+    msg += CleanField(shipName) + sep;
     msg += (int)shipMode + sep;
     msg += FormatFloat(shipPosition.X) + "" + sep;
     msg += FormatFloat(shipPosition.Y) + sep;
@@ -4447,18 +4475,22 @@ void BroadcastShipState(String extra)
     if (shipMode != ShipMode.Shuttle)
         msg += GetJobStateName(lastJobState) + (lastJobState == JobState.Active ? " " + Math.Round(jobProgress, 1) + "%" : "") + sep;
     else msg += GetJobStateName(lastJobState) + sep;
-    msg += statusMessage + sep;
+    msg += CleanField(statusMessage) + sep;
     msg += menuIndex + "" + sep;
-    msg += menuCacheText + sep;
+    msg += CleanField(menuCacheText) + sep;
     msg += currentVolume + sep;
     msg += maxVolume + sep;
     for (int i = 0; i < itemList.Count; i++)
     {
         if (itemList[i].location != ItemLocation.InCargo) continue;
-        msg += itemList[i].name + "/" + itemList[i].type + "/" + itemList[i].amount + sep;
+        msg += CleanField(itemList[i].name) + "/" + CleanField(itemList[i].type) + "/" + itemList[i].amount + sep;
     }
     SendBroadcast(msg, extra);
 }
+
+// Fields are ';'-separated with no escaping, so a ';' in a ship name, status or menu text would
+// shift every following field on the controller. Replace it before sending.
+String CleanField(String s) { return s == null ? "" : s.Replace(BROADCAST_SEP, ','); }
 
 void SendBroadcast(String msg, String extra) { SendBroadcastTo(msg, BROADCAST_SELF_ID, extra); }
 
@@ -4589,7 +4621,7 @@ String FindCustomDataLine(String[] lines, String key, ref bool ok)
 
 // ========================== 27_Controller.cs ==========================
 // ========================== CONTROLLER MODE ==========================
-// (Full controller logic for managing remote ships)
+// Controller PB: lists PAM ships in antenna range and sends them commands (ported from PAM 1.3.1)
 
 void ControllerMainLoop(string argument)
 {
@@ -4600,25 +4632,31 @@ void ControllerMainLoop(string argument)
 
     if (!IsInternalMessage(argument)) ProcessControllerArgument(argument);
 
-    if (broadcastListener != null && broadcastListener.HasPendingMessage)
+    // Process every queued ship broadcast (one per run fell behind with many ships), sort once.
+    bool shipsChanged = false;
+    int msgBudget = 50;
+    while (broadcastListener != null && broadcastListener.HasPendingMessage && msgBudget-- > 0)
     {
         MyIGCMessage msg = broadcastListener.AcceptMessage();
-        String data = (string)msg.Data;
+        String data = msg.Data as String;
+        if (data == null) continue;
         if (ParseBroadcastMessage(ref data, out senderId, out extra) && senderId != "" && senderId != BROADCAST_SELF_ID)
         {
             ShipInfo ship = FindShip(senderId, "");
             if (ship == null) { ship = new ShipInfo(senderId); connectedShips.Add(ship); }
             ship.ProcessCommand(extra, false, false, true);
             UpdateShipInfo(ship, data);
-            connectedShips.Sort(delegate (ShipInfo a, ShipInfo b)
-            {
-                if (a.name == null && b.name == null) return 0;
-                else if (a.name == null) return -1;
-                else if (b.name == null) return 1;
-                else return a.name.CompareTo(b.name);
-            });
+            shipsChanged = true;
         }
     }
+    if (shipsChanged)
+        connectedShips.Sort(delegate (ShipInfo a, ShipInfo b)
+        {
+            if (a.name == null && b.name == null) return 0;
+            else if (a.name == null) return -1;
+            else if (b.name == null) return 1;
+            else return a.name.CompareTo(b.name);
+        });
 
     if (isSlowTick || firstRun)
     {
@@ -4688,7 +4726,7 @@ ShipInfo FindShip(String id, String name)
     for (int i = 0; i < connectedShips.Count; i++)
     {
         if (id != "" && connectedShips[i].id.ToUpper() == id) return connectedShips[i];
-        if (name != "" && connectedShips[i].name.ToUpper() == name) return connectedShips[i];
+        if (name != "" && connectedShips[i].name != null && connectedShips[i].name.ToUpper() == name) return connectedShips[i];
     }
     return null;
 }
@@ -4740,8 +4778,12 @@ void ProcessControllerArgument(string argument)
     switch (cmd)
     {
         case "CLEAR": ClearShipList(); return;
-        case "SENDALL": SendCommandToShip(null, arg1); return;
-        case "SEND": SendToNamedShip(argument.Remove(0, "SEND".Length + 1)); return;
+        case "SENDALL":
+            if (String.IsNullOrEmpty(arg1)) { statusMessage = "Usage: SENDALL <cmd>"; return; }
+            SendCommandToShip(null, arg1); return;
+        case "SEND":
+            if (argument.Length <= "SEND".Length + 1) { statusMessage = "Usage: SEND <ship>:<cmd>"; return; }
+            SendToNamedShip(argument.Remove(0, "SEND".Length + 1)); return;
     }
     statusMessage = invalidMsg;
 }
@@ -4771,6 +4813,16 @@ void ScanControllerBlocks()
     SetupDebugPanels();
     SetLCDFormat(lcdPanels, setLCDFontAndSize, 1.15f, false);
     SetLCDFormat(textSurfaces, setLCDFontAndSize, 1.15f, true);
+
+    // Write the LCD mode template into empty Custom Data; flag outdated Custom Data.
+    String helpText = GetLCDModeHelp(false);
+    String obsoleteNote = "//Custom Data is obsolete, please delete it.\n\n";
+    foreach (IMyTerminalBlock panel in lcdPanels)
+    {
+        if (panel.CustomData == "") { panel.CustomData = GetLCDModeHelp(true); continue; }
+        if (!panel.CustomData.Contains(helpText))
+            if (!panel.CustomData.Contains(obsoleteNote)) panel.CustomData = obsoleteNote + panel.CustomData;
+    }
 }
 
 void UpdateControllerDisplays()
@@ -4782,7 +4834,7 @@ void UpdateControllerDisplays()
         "*[SENDALL] = Cmd to all ships:\n" + " e.g.: \"SENDALL homepos\"\n\n";
 
     for (int i = 0; i < textSurfaces.Count; i++)
-        textSurfaces[i].WriteText(BuildControllerScreenForMode(LCDMode.MainPagedCompact, "0", false));
+        textSurfaces[i].WriteText(BuildControllerScreenForMode(LCDMode.MainCompact, "0", false));
     for (int i = 0; i < lcdPanels.Count; i++)
     {
         LCDMode mode = LCDMode.Unknown;
@@ -4806,17 +4858,133 @@ String BuildControllerScreen(bool applyAction)
     return BuildControllerScreen(applyAction, 0, ref dummy, false, 1);
 }
 
+// Controller menu. pageOffset/scrollState/compact/pageSize are used by the paged LCD modes.
 String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollState, bool compact, int pageSize)
 {
-    // Simplified - the full implementation handles all controller menu pages
-    // (ship list, ship detail, send commands, inventory view)
-    return "[PAM]-Controller | " + connectedShips.Count + " Connected ships\n";
+    String text = "";
+    String separator = "——————————————————\n";
+    String thinSeparator = "--------------------------------------------\n";
+
+    if (selectedShip == null || currentMenu == MenuPage.Main || currentMenu == MenuPage.SendCommandAll)
+        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n";
+    else text += GetShipStatusLine(selectedShip) + "\n";
+    text += separator;
+
+    int idx = 0;
+    int sel = menuIndex;
+    menuItemCount = 0;
+
+    if (statusMessage != "")
+    {
+        AddMenuItem(ref text, sel, idx++, applyAction, statusMessage);
+    }
+    else if (currentMenu == MenuPage.Main)
+    {
+        if (selectedShip == null && connectedShips.Count >= 1) selectedShip = connectedShips[0];
+        String list = "";
+        if (AddMenuItem(ref list, sel, idx++, applyAction, " Send command to all")) NavigateToMenu(MenuPage.SendCommandAll);
+        int selectedLine = 0;
+        for (int s = 0; s < connectedShips.Count; s++)
+        {
+            if (compact) list += "\n";
+            ShipInfo ship = connectedShips[s];
+            if (sel == idx || sel == idx + 1) selectedShip = ship;
+            if (idx == sel) selectedLine = list.Split('\n').Length - 1;
+            if (AddMenuItem(ref list, sel, idx++, applyAction, " " + GetShipStatusLine(ship)))
+            {
+                selectedShip = ship;
+                NavigateToMenu(MenuPage.ShipList);
+                selectedShip.ProcessCommand("", false, true, false);
+            }
+            if (idx == sel) selectedLine = list.Split('\n').Length - 1;
+            if (AddMenuItem(ref list, sel, idx++, applyAction, " " + (compact ? "" : "  ") + GetShipCargoLine(ship)))
+            {
+                selectedShip = ship;
+                NavigateToMenu(MenuPage.ShipInventory);
+            }
+        }
+        int visibleLines = pageSize - 2;
+        visibleLines += Math.Max(0, (pageOffset - 1)) * pageSize;
+        text += ScrollText(visibleLines, list, selectedLine, ref scrollState);
+    }
+    else if (currentMenu == MenuPage.SendCommand || currentMenu == MenuPage.SendCommandAll)
+    {
+        MenuPage backPage = currentMenu == MenuPage.SendCommand ? MenuPage.ShipList : MenuPage.Main;
+        ShipInfo target = null; // null = all ships
+        if (currentMenu == MenuPage.SendCommand) target = selectedShip;
+        if (AddMenuItem(ref text, sel, idx++, applyAction, " Back")) { NavigateToMenu(backPage); }
+        if (AddMenuItem(ref text, sel, idx++, applyAction, " [Stop] " + GetCommandStatusText(target, "STOP"))) { SendCommandToShip(target, "STOP"); }
+        if (AddMenuItem(ref text, sel, idx++, applyAction, " [Continue] " + GetCommandStatusText(target, "CONT"))) { SendCommandToShip(target, "CONT"); }
+        if (AddMenuItem(ref text, sel, idx++, applyAction, " [Move home] " + GetCommandStatusText(target, "HOMEPOS"))) { SendCommandToShip(target, "HOMEPOS"); }
+        if (AddMenuItem(ref text, sel, idx++, applyAction, " [Move to job] " + GetCommandStatusText(target, "JOBPOS"))) { SendCommandToShip(target, "JOBPOS"); }
+        if (AddMenuItem(ref text, sel, idx++, applyAction, " [Full simulation] " + GetCommandStatusText(target, "FULL"))) { SendCommandToShip(target, "FULL"); }
+        if (target != null && target.shipMode == ShipMode.Shuttle)
+            if (AddMenuItem(ref text, sel, idx++, applyAction, " [Undock] " + GetCommandStatusText(target, "UNDOCK"))) { SendCommandToShip(target, "UNDOCK"); }
+    }
+    else if (currentMenu == MenuPage.ShipList)
+    {
+        // Ship detail: mirrors the remote ship's own menu, navigated via UP/DOWN/APPLY forwarding.
+        String backLine = "";
+        if (AddMenuItem(ref backLine, sel, idx++, applyAction, " Back")) { NavigateToMenu(MenuPage.Main); }
+        text += backLine.Substring(0, backLine.Length - 1).PadRight(36, ' ');
+        if (AddMenuItem(ref text, sel, idx++, applyAction, " Send cmd")) { NavigateToMenu(MenuPage.SendCommand); }
+        if (!selectedShip.IsTimedOut() && !selectedShip.IsCommandTimedOut()) menuItemCount++;
+        if (selectedShip.IsCommandTimedOut()) text += "No answer received...";
+        else text += SignalOrText(selectedShip, selectedShip.menuText);
+    }
+    else if (currentMenu == MenuPage.ShipInventory)
+    {
+        if (AddMenuItem(ref text, sel, idx++, applyAction, " Back")) { NavigateToMenu(MenuPage.Main); }
+        text += thinSeparator;
+        text += SignalOrText(selectedShip, GetShipInventoryText(selectedShip));
+    }
+
+    if (!menuJustNavigated) menuIndex = Math.Min(menuItemCount - 1, menuIndex);
+    return text;
 }
 
-String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel)
+String GetShipStatusLine(ShipInfo ship)
 {
-    // Simplified - dispatches to appropriate display mode
-    return BuildControllerScreen(false);
+    if (ship.version != VERSION) return ship.name + ": Different version!";
+    return ship.name + ": " + SignalOrText(ship, ship.stateText) + " " + ship.distance + "m";
+}
+
+String GetShipCargoLine(ShipInfo ship)
+{
+    String s = ProgressBar("", SafeDiv(ship.currentVolume, ship.maxVolume) * 100f, 100f, 8, 0, 0) + "% ";
+    for (int i = 0; i < ship.items.Count; i++)
+    {
+        if (i >= 5) break;
+        ItemInfo item = ship.items[i];
+        s += Truncate(Capitalize(GetItemShortName(item)), 3) + " " + FormatAmount(item.amount) + " ";
+    }
+    return s;
+}
+
+String GetItemShortName(ItemInfo item)
+{
+    if (item.type.ToUpper() == "ORE" || item.type.ToUpper() == "INGOT")
+    {
+        String code = GetElementCode(item.name.ToUpper());
+        if (code != "") return code;
+    }
+    return item.name;
+}
+
+// Replaces the text with "No signal..." once the ship hasn't reported for a while.
+String SignalOrText(ShipInfo ship, String text)
+{
+    if (ship.IsTimedOut()) return "No signal...(" + FormatTime((int)(DateTime.Now - ship.lastMessageTime).TotalSeconds) + ")";
+    return text;
+}
+
+String GetLCDModeHelp(bool withDefault)
+{
+    String text = "";
+    if (withDefault) text += "mode=main:1\n\n";
+    text += "//Available modes:\n" + "//main:<Page>\n" + "//mainX:<Page>  (no empty lines)\n" + "//menu\n" +
+        "//inventory\n" + "//menu:<shipname>\n" + "//inventory:<shipname>";
+    return text;
 }
 
 void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
@@ -4833,6 +5001,124 @@ void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
     else if (modeKey == "INVENTORY") mode = LCDMode.Inventory;
     else if (modeKey == "DEBUG") mode = LCDMode.Debug;
     if (mode == LCDMode.Unknown) param = modeStr;
+}
+
+// Renders one LCD. "main:<page>" pages share one scrolling list; firstPanel resets the page bookkeeping.
+String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel)
+{
+    int linesPerPage = 15;
+    if (firstPanel)
+    {
+        controllerPageIdx1 = controllerPageCount1;
+        controllerPageCount1 = 0;
+        controllerPageIdx2 = controllerPageCount2;
+        controllerPageCount2 = 0;
+    }
+    String text = "";
+    if (mode == LCDMode.MainPaged)
+    {
+        int page = 0;
+        text = BuildControllerScreen(false, controllerPageIdx1, ref controllerScrollState1, true, linesPerPage);
+        if (!int.TryParse(param, out page)) return text;
+        controllerPageCount1 = Math.Max(page, controllerPageCount1);
+        page--;
+        return PageText(page, linesPerPage, text);
+    }
+    else if (mode == LCDMode.MainPagedCompact)
+    {
+        int page = 0;
+        text = BuildControllerScreen(false, controllerPageIdx2, ref controllerScrollState2, false, linesPerPage);
+        if (!int.TryParse(param, out page)) return text;
+        controllerPageCount2 = Math.Max(page, controllerPageCount2);
+        page--;
+        return PageText(page, linesPerPage, text);
+    }
+    if (mode == LCDMode.MainCompact)
+    {
+        return BuildControllerScreen(false, 0, ref controllerScrollState3, true, linesPerPage);
+    }
+    else if (mode == LCDMode.Inventory || mode == LCDMode.Menu || mode == LCDMode.Debug)
+    {
+        ShipInfo ship = selectedShip;
+        if (param != "")
+        {
+            ship = FindShip("", param);
+            if (ship == null) return "Unknown ship: " + param;
+        }
+        else
+        {
+            if (ship == null) return "No ship on main screen selected.";
+            text = "Selected: ";
+        }
+        String separator = "—————————————————————\n";
+        String title = "";
+        String body = "";
+        if (mode == LCDMode.Menu) { title = "Menu"; body = SignalOrText(ship, ship.menuText); }
+        else if (mode == LCDMode.Inventory) { title = "Inventory"; body = SignalOrText(ship, GetShipInventoryText(ship)); }
+        else if (mode == LCDMode.Debug) { return SignalOrText(ship, GetShipDebugText(ship)); }
+        text += ship.name + " - " + ship.distance + "m | " + Capitalize("" + title) + "\n" + separator;
+        text += body;
+        return text;
+    }
+    return "Unknown command: " + param;
+}
+
+string GetShipDebugText(ShipInfo ship)
+{
+    String s = "";
+    s += ship.version + "\n";
+    s += ship.name + "\n";
+    s += ship.position.X + "\n";
+    s += ship.position.Y + "\n";
+    s += ship.position.Z + "\n";
+    s += ship.stateText + "\n";
+    s += ship.statusMessage + "\n";
+    s += ship.menuIndex + "\n";
+    s += ship.menuText.Length + "\n";
+    s += ship.currentVolume + "\n";
+    s += ship.maxVolume + "\n";
+    s += ship.items.Count() + "\n";
+    return s;
+}
+
+string GetShipInventoryText(ShipInfo ship)
+{
+    String s = "";
+    s += ProgressBar("All", SafeDiv(ship.currentVolume, ship.maxVolume) * 100f, 100, 30, 8, 12) + "%\n";
+    s += "\n";
+    for (int i = 0; i < ship.items.Count(); i++)
+    {
+        ItemInfo item = ship.items[i];
+        s += ProgressBar(item.name, item.amount, ship.totalItems, 30, 8, 10) + "\n";
+    }
+    return s;
+}
+
+// Combined command state for one ship, or for all ships when ship == null.
+CommandState GetCommandState(ShipInfo ship, bool clear, string cmd)
+{
+    CommandState result = CommandState.None;
+    if (ship == null)
+    {
+        for (int i = 0; i < connectedShips.Count; i++)
+        {
+            CommandState state = connectedShips[i].ProcessCommand(cmd, false, clear, false);
+            if (state == CommandState.Received) result = state;
+            if (state == CommandState.NoAnswer) return state;
+            if (state == CommandState.Pending) return state;
+        }
+        return result;
+    }
+    else return ship.ProcessCommand(cmd, false, clear, false);
+}
+
+String GetCommandStatusText(ShipInfo ship, String cmd)
+{
+    CommandState state = GetCommandState(ship, false, cmd);
+    if (state == CommandState.Received) return "received!";
+    if (state == CommandState.Pending) return "pending...";
+    if (state == CommandState.NoAnswer) return "no answer!";
+    return "";
 }
 
 // ========================== 28_UIHelpers.cs ==========================

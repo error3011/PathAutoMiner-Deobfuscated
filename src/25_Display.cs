@@ -80,6 +80,7 @@ string GetInstructionInfo()
 void HandleError()
 {
     String text = "Error occurred! \nPlease copy this and paste it \nin the \"Bugs and issues\" discussion.\n" +
+        "Run with argument RETRY to restart.\n" +
         "Version: " + VERSION + "\n";
     SetLCDFormat(lcdPanels, setLCDFontAndSize, 0.9f, false);
     SetLCDFormat(textSurfaces, setLCDFontAndSize, 0.9f, true);

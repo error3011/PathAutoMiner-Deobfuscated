@@ -68,11 +68,13 @@ for i, line in enumerate(code.split('\n'), 1):
     if len(line) > 100000:
         errors.append(f"LINE TOO LONG: line {i} has {len(line)} chars")
 
-# 6. Check Unicode identifier validity
+# 6. Check Unicode identifier validity (outside string/char literals - text may contain anything)
 # C# allows: Lu, Ll, Lt, Lm, Lo, Nl categories for identifiers
 import unicodedata
+code_only = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', code)
+code_only = re.sub(r"'(?:[^'\\\n]|\\.)'", "' '", code_only)
 bad_chars = set()
-for c in code:
+for c in code_only:
     if ord(c) > 127:
         cat = unicodedata.category(c)
         if cat not in ('Lu', 'Ll', 'Lt', 'Lm', 'Lo', 'Nl', 'Mn', 'Mc', 'Nd', 'Pc', 'Cf'):
@@ -81,20 +83,20 @@ if bad_chars:
     for c, h, cat in sorted(bad_chars, key=lambda x: x[1]):
         errors.append(f"SUSPICIOUS UNICODE: '{c}' ({h}) category={cat}")
 
-# 7. Verify enum values are intact
-enums_to_check = [
-    ('ShipMode', ['Unknown', 'Miner', 'Grinder', 'Controller', 'Shuttle']),
-    ('NavState', ['Idle', 'FlyToXY', 'Mining']),
-    ('JobState', ['NoJob', 'Paused', 'Active']),
-]
-# These enum VALUE NAMES are user-defined and WILL be renamed, so skip
+# 7. Programmable block character limit (counted with LF line endings, as pasted in-game)
+SE_CHAR_LIMIT = 100000
+char_count = len(code.replace('\r\n', '\n'))
+if char_count > SE_CHAR_LIMIT:
+    errors.append(f"TOO LONG: {char_count} chars, programmable block limit is {SE_CHAR_LIMIT}")
+elif char_count > SE_CHAR_LIMIT * 0.95:
+    errors.append(f"WARNING: {char_count} chars is within 5% of the {SE_CHAR_LIMIT} limit")
 
 # 8. Check for split-specific issues: verify no section comment markers leaked
 if '// ==========================' in code:
     errors.append("SECTION COMMENT leaked into minified output")
 
 print(f"Validating: {path}")
-print(f"Size: {len(code)} chars")
+print(f"Size: {char_count} chars (limit {SE_CHAR_LIMIT})")
 print()
 
 if errors:
@@ -103,3 +105,6 @@ if errors:
         print(f"  - {e}")
 else:
     print("ALL CHECKS PASSED")
+
+# non-zero exit on real problems so builds/CI can fail on them (warnings don't fail)
+sys.exit(1 if any(not e.startswith("WARNING") for e in errors) else 0)
