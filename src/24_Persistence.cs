@@ -3,6 +3,13 @@
 void Save()
 {
     if (resetRequested || shipMode == ShipMode.Controller) { Storage = ""; return; }
+    Storage = BuildSaveData();
+}
+
+// Everything PAM persists (path, home dock, job position, mining area, settings) as one string.
+// Used by Save() and by EXPORT.
+String BuildSaveData()
+{
     saveBuffer.Clear();
     saveBuffer.Append(DATAREV + ";");
     AppendStorage(VectorToString(referencePosition), false);
@@ -55,14 +62,18 @@ void Save()
     AppendStorage(";");
     for (int i = 0; i < waypoints.Count; i++)
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
-    Storage = saveBuffer.ToString();
+    String data = saveBuffer.ToString();
     saveBuffer.Clear();
+    return data;
 }
 
-DataResult RestoreData()
+DataResult RestoreData() { return RestoreFrom(Storage); }
+
+// Parses data written by BuildSaveData(). Used at load and by IMPORT.
+DataResult RestoreFrom(String data)
 {
-    if (Storage == "") return DataResult.NoData;
-    String[] sections = Storage.Split(';');
+    if (data == "") return DataResult.NoData;
+    String[] sections = data.Split(';');
     if (SafeElement(sections, 0) != DATAREV) return DataResult.NewVersion;
 
     int idx = 0;
@@ -154,4 +165,59 @@ DataResult RestoreData()
     savedJobState = lastJobState;
     StopAll();
     return DataResult.Success;
+}
+
+// ========================== EXPORT / IMPORT ==========================
+// EXPORT copies the saved data (path, home dock, job position, mining area, settings) into the
+// Custom Data of a block named with dataTag; IMPORT loads it back. Meant for backups and for
+// identical copies of the same ship. Custom Data is limited to 64000 characters by the game.
+
+const int CUSTOM_DATA_LIMIT = 64000;
+
+IMyTerminalBlock FindDataBlock()
+{
+    List<IMyTerminalBlock> blocks = new List<IMyTerminalBlock>();
+    gridTerminalSystem.GetBlocksOfType(blocks, q => q.CubeGrid == Me.CubeGrid && q.CustomName.Contains(dataTag));
+    return blocks.Count > 0 ? blocks[0] : null;
+}
+
+void ExportData()
+{
+    IMyTerminalBlock block = FindDataBlock();
+    if (block == null) { statusMessage = "Export: name a block " + dataTag; return; }
+    String data = "// PAM export " + VERSION + " | " + Me.CubeGrid.CustomName + " | " + waypoints.Count +
+        " waypoints | " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "\n" + BuildSaveData();
+    if (data.Length > CUSTOM_DATA_LIMIT)
+    {
+        statusMessage = "Export too large: " + data.Length + " chars, max " + CUSTOM_DATA_LIMIT;
+        return;
+    }
+    block.CustomData = data;
+    statusMessage = "Exported " + waypoints.Count + " waypoints";
+}
+
+void ImportData()
+{
+    IMyTerminalBlock block = FindDataBlock();
+    if (block == null) { statusMessage = "Import: name a block " + dataTag; return; }
+    String data = block.CustomData.Replace("\r", "");
+    if (data.StartsWith("//"))
+    {
+        int nl = data.IndexOf('\n');
+        data = nl < 0 ? "" : data.Substring(nl + 1);
+    }
+    data = data.Trim();
+    if (data == "") { statusMessage = "Import: no PAM data in " + dataTag; return; }
+
+    StopAll();
+    String backup = BuildSaveData();
+    DataResult result = RestoreFrom(data);
+    if (result == DataResult.Success)
+    {
+        needPositionUpdate = false;
+        statusMessage = "Imported " + waypoints.Count + " waypoints";
+        return;
+    }
+    RestoreFrom(backup); // undo a partial import
+    statusMessage = result == DataResult.NewVersion ? "Import: data is from another PAM version" : "Import failed, nothing changed";
 }

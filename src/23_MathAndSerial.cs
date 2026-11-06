@@ -106,9 +106,10 @@ void AppendStorage<T>(T value, bool newLine) { if (newLine) saveBuffer.Append('\
 void AppendStorage<T>(T value) { AppendStorage(value, true); }
 
 // Block names can contain the Storage separators (';' between sections, '\n' between values).
-// Escape them so a timer called e.g. "Dock;1" can't corrupt the save. Old saves contain neither token.
-String EscapeStored(String s) { return s.Replace("&", "&#38;").Replace(";", "&#59;").Replace("\n", "&#10;"); }
-String UnescapeStored(String s) { return s.Replace("&#10;", "\n").Replace("&#59;", ";").Replace("&#38;", "&"); }
+// Escape them so a timer called e.g. "Dock;1" can't corrupt the save. The escapes themselves must
+// not contain ';' '\n' '|' or ':' (an earlier "&#59;" version did, which broke the save).
+String EscapeStored(String s) { return s.Replace("%", "%25").Replace(";", "%3B").Replace("\n", "%0A"); }
+String UnescapeStored(String s) { return s.Replace("%0A", "\n").Replace("%3B", ";").Replace("%25", "%"); }
 
 String SafeElement(String[] arr, int idx)
 {

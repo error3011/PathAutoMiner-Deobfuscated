@@ -21,6 +21,7 @@ const string DATAREV = "14";
 
 const String pamTag = "[PAM]";
 const String controllerTag = "[PAM-Controller]";
+const String dataTag = "[PAM-Data]"; //EXPORT/IMPORT use the Custom Data of the block with this tag
 //Tag for LCD's of cockpits and other blocks: [PAM:<lcdIndex>] e.g: [PAM:1]
 
 const int gyroSpeedSmall = 15; //[RPM] small ship
@@ -927,6 +928,8 @@ void ProcessShipArgument(string argument)
         case "HOMEPOS": { this.StopAll(); this.FlyToHomePosition(); } break;
         case "FULL": { simulateShipFull = true; } break;
         case "RESET": { resetRequested = true; setupErrorLevel = 2; } break;
+        case "EXPORT": { ExportData(); } break;
+        case "IMPORT": { ImportData(); } break;
         default: unhandled = true; break;
     }
 
@@ -982,7 +985,8 @@ String GetHelpText()
         "[PATHHOME] Record path, set home\n" + "[PATH] Record path, use old home\n" +
         "[START] Start job\n" + "[STOP] Stop every process\n" + "[CONT] Continue last job\n" +
         "[JOBPOS] Move to job position\n" + "[HOMEPOS] Move to home position\n\n" +
-        "[FULL] Simulate ship is full\n" + "[ALIGN] Align the ship to planet\n" + "[RESET] Reset all data\n";
+        "[FULL] Simulate ship is full\n" + "[ALIGN] Align the ship to planet\n" + "[RESET] Reset all data\n" +
+        "[EXPORT] Save path+job to " + dataTag + "\n" + "[IMPORT] Load path+job from " + dataTag + "\n";
 
     if (shipMode != ShipMode.Shuttle)
         text += "[SHUTTLE] Enable shuttle mode\n" + "[NEXT] Next hole\n" + "[PREV] Previous hole\n\n" +
@@ -4206,9 +4210,10 @@ void AppendStorage<T>(T value, bool newLine) { if (newLine) saveBuffer.Append('\
 void AppendStorage<T>(T value) { AppendStorage(value, true); }
 
 // Block names can contain the Storage separators (';' between sections, '\n' between values).
-// Escape them so a timer called e.g. "Dock;1" can't corrupt the save. Old saves contain neither token.
-String EscapeStored(String s) { return s.Replace("&", "&#38;").Replace(";", "&#59;").Replace("\n", "&#10;"); }
-String UnescapeStored(String s) { return s.Replace("&#10;", "\n").Replace("&#59;", ";").Replace("&#38;", "&"); }
+// Escape them so a timer called e.g. "Dock;1" can't corrupt the save. The escapes themselves must
+// not contain ';' '\n' '|' or ':' (an earlier "&#59;" version did, which broke the save).
+String EscapeStored(String s) { return s.Replace("%", "%25").Replace(";", "%3B").Replace("\n", "%0A"); }
+String UnescapeStored(String s) { return s.Replace("%0A", "\n").Replace("%3B", ";").Replace("%25", "%"); }
 
 String SafeElement(String[] arr, int idx)
 {
@@ -4223,6 +4228,13 @@ String SafeElement(String[] arr, int idx)
 void Save()
 {
     if (resetRequested || shipMode == ShipMode.Controller) { Storage = ""; return; }
+    Storage = BuildSaveData();
+}
+
+// Everything PAM persists (path, home dock, job position, mining area, settings) as one string.
+// Used by Save() and by EXPORT.
+String BuildSaveData()
+{
     saveBuffer.Clear();
     saveBuffer.Append(DATAREV + ";");
     AppendStorage(VectorToString(referencePosition), false);
@@ -4275,14 +4287,18 @@ void Save()
     AppendStorage(";");
     for (int i = 0; i < waypoints.Count; i++)
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
-    Storage = saveBuffer.ToString();
+    String data = saveBuffer.ToString();
     saveBuffer.Clear();
+    return data;
 }
 
-DataResult RestoreData()
+DataResult RestoreData() { return RestoreFrom(Storage); }
+
+// Parses data written by BuildSaveData(). Used at load and by IMPORT.
+DataResult RestoreFrom(String data)
 {
-    if (Storage == "") return DataResult.NoData;
-    String[] sections = Storage.Split(';');
+    if (data == "") return DataResult.NoData;
+    String[] sections = data.Split(';');
     if (SafeElement(sections, 0) != DATAREV) return DataResult.NewVersion;
 
     int idx = 0;
@@ -4374,6 +4390,61 @@ DataResult RestoreData()
     savedJobState = lastJobState;
     StopAll();
     return DataResult.Success;
+}
+
+// ========================== EXPORT / IMPORT ==========================
+// EXPORT copies the saved data (path, home dock, job position, mining area, settings) into the
+// Custom Data of a block named with dataTag; IMPORT loads it back. Meant for backups and for
+// identical copies of the same ship. Custom Data is limited to 64000 characters by the game.
+
+const int CUSTOM_DATA_LIMIT = 64000;
+
+IMyTerminalBlock FindDataBlock()
+{
+    List<IMyTerminalBlock> blocks = new List<IMyTerminalBlock>();
+    gridTerminalSystem.GetBlocksOfType(blocks, q => q.CubeGrid == Me.CubeGrid && q.CustomName.Contains(dataTag));
+    return blocks.Count > 0 ? blocks[0] : null;
+}
+
+void ExportData()
+{
+    IMyTerminalBlock block = FindDataBlock();
+    if (block == null) { statusMessage = "Export: name a block " + dataTag; return; }
+    String data = "// PAM export " + VERSION + " | " + Me.CubeGrid.CustomName + " | " + waypoints.Count +
+        " waypoints | " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "\n" + BuildSaveData();
+    if (data.Length > CUSTOM_DATA_LIMIT)
+    {
+        statusMessage = "Export too large: " + data.Length + " chars, max " + CUSTOM_DATA_LIMIT;
+        return;
+    }
+    block.CustomData = data;
+    statusMessage = "Exported " + waypoints.Count + " waypoints";
+}
+
+void ImportData()
+{
+    IMyTerminalBlock block = FindDataBlock();
+    if (block == null) { statusMessage = "Import: name a block " + dataTag; return; }
+    String data = block.CustomData.Replace("\r", "");
+    if (data.StartsWith("//"))
+    {
+        int nl = data.IndexOf('\n');
+        data = nl < 0 ? "" : data.Substring(nl + 1);
+    }
+    data = data.Trim();
+    if (data == "") { statusMessage = "Import: no PAM data in " + dataTag; return; }
+
+    StopAll();
+    String backup = BuildSaveData();
+    DataResult result = RestoreFrom(data);
+    if (result == DataResult.Success)
+    {
+        needPositionUpdate = false;
+        statusMessage = "Imported " + waypoints.Count + " waypoints";
+        return;
+    }
+    RestoreFrom(backup); // undo a partial import
+    statusMessage = result == DataResult.NewVersion ? "Import: data is from another PAM version" : "Import failed, nothing changed";
 }
 
 // ========================== 25_Display.cs ==========================

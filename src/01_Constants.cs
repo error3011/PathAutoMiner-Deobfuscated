@@ -20,6 +20,7 @@ const string DATAREV = "14";
 
 const String pamTag = "[PAM]";
 const String controllerTag = "[PAM-Controller]";
+const String dataTag = "[PAM-Data]"; //EXPORT/IMPORT use the Custom Data of the block with this tag
 //Tag for LCD's of cockpits and other blocks: [PAM:<lcdIndex>] e.g: [PAM:1]
 
 const int gyroSpeedSmall = 15; //[RPM] small ship
