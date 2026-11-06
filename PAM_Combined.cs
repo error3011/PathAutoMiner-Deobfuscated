@@ -433,6 +433,7 @@ Vector3 pathSegmentDir = new Vector3();
 float lastDistToTarget = 0;
 float stuckSensitivity = 0;
 int waypointCalcIndex = 0;
+WaypointInfo spaceWaypoint = null; // zero-gravity waypoint used by CalculateMaxWeight (separate from path-following's currentPathWaypoint)
 float lastOreAmount = 0;
 float autoDepthRef = 0;
 float currentMineDepth = 0;
@@ -3468,7 +3469,7 @@ void CalculateMaxWeight(bool init)
     {
         maxWeight = -1;
         waypointCalcIndex = 0;
-        currentPathWaypoint = null;
+        spaceWaypoint = null;
 
         if (jobState != JobState.NoJob && jobPosition.gravity.Length() != 0)
         {
@@ -3500,7 +3501,7 @@ void CalculateMaxWeight(bool init)
                     GravityThrustRatio(wp.forwardDir * -1, wp.downDir * -1, wp.gravity, wp));
                 if (weight < maxWeight || maxWeight == -1) maxWeight = weight;
             }
-            else currentPathWaypoint = wp;
+            else spaceWaypoint = wp;
             waypointCalcIndex++;
         }
         waypointCalcIndex = -1;
@@ -3508,14 +3509,14 @@ void CalculateMaxWeight(bool init)
 
     bool hasAtmoThrusters = true;
     float minThrust = 0;
-    if (currentPathWaypoint != null)
+    if (spaceWaypoint != null)
     {
         for (int i = 0; i < thrustByType.Count; i++)
         {
             String typeName = thrustByType.Keys.ElementAt(i);
             float[,] typeMap = thrustByType.Values.ElementAt(i);
             float eff = 0;
-            if (!GetThrusterEfficiency(currentPathWaypoint, typeName, out eff))
+            if (!GetThrusterEfficiency(spaceWaypoint, typeName, out eff))
             {
                 hasAtmoThrusters = false;
                 break;

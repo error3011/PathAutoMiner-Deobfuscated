@@ -424,7 +424,7 @@ def minify(source_code):
         freq[ident] = count
     
     # Sort by frequency (most frequent gets shortest name)
-    sorted_idents = sorted(freq.keys(), key=lambda x: -freq[x])
+    sorted_idents = sorted(freq.keys(), key=lambda x: (-freq[x], x))  # tie-break by name -> deterministic output
     
     # Step 5: Assign short names
     name_pool = build_name_pool()

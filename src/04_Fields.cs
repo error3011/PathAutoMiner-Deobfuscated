@@ -137,6 +137,7 @@ Vector3 pathSegmentDir = new Vector3();
 float lastDistToTarget = 0;
 float stuckSensitivity = 0;
 int waypointCalcIndex = 0;
+WaypointInfo spaceWaypoint = null; // zero-gravity waypoint used by CalculateMaxWeight (separate from path-following's currentPathWaypoint)
 float lastOreAmount = 0;
 float autoDepthRef = 0;
 float currentMineDepth = 0;
