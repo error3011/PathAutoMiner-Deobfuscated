@@ -141,13 +141,7 @@ SE_API = {
 # ─── Identifiers from the deobfuscated code that map to user logic ────────
 # The const values that appear in strings or are important to preserve
 CONST_PRESERVE = {
-    "VERSION","DATAREV","pamTag","controllerTag",
-    "gyroSpeedSmall","gyroSpeedLarge","generalSpeedLimit","dockingSpeed",
-    "dockDist","followPathDock","followPathJob",
-    "useDockDirectionDist","useJobDirectionDist",
-    "wpReachedDist","drillRadius","sensorRange","fastSpeed",
-    "minAccelerationSmall","minAccelerationLarge","minEjection",
-    "setLCDFontAndSize","checkConveyorSystem",
+    "VERSION","DATAREV",  # settings are fields read from Custom Data now: renamed like the rest
     "BROADCAST_TAG","BROADCAST_SELF_ID","BROADCAST_SEP",
     # String values used in SE API calls
     "OnOff_On","OnOff_Off","Override","Roll","Pitch","Yaw",

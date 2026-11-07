@@ -17,71 +17,50 @@
 const string VERSION = "1.3.1";
 const string DATAREV = "14";
 
-// ===== Settings: edit the values below =====
-// (each script only lists the settings it uses; details in the README)
-
-const String pamTag = "[PAM]"; //LCDs of cockpits and other blocks: [PAM:<lcdIndex>] e.g. [PAM:1]
-const String controllerTag = "[PAM-Controller]";
-const String dataTag = "[PAM-Data]"; //EXPORT/IMPORT use the Custom Data of the block with this tag
-const String dockPoolTag = "[PAM-Dock]"; //base connectors ships may use when their own home dock is taken
-
-//Station dock control ([PAM-Controller] PB at the station): one ship at a time in the docking area
-const String zoneTag = "[PAM-Zone]"; //sensor over the docking area: nobody cleared while another ship moves in it
-const String laneTag = "[PAM-Lane]"; //camera at a connector, facing out along its approach: lane must be clear
-const float dockLaneLength = 40f;//[m] how far the lane cameras check
-const float dockRequestDistance = 300f;//[m] ships ask for clearance this close to home, then wait outside the zone
-
-const int gyroSpeedSmall = 15; //[RPM] small ship
-const int gyroSpeedLarge = 5; //[RPM] large ship
-const int generalSpeedLimit = 100; //[m/s] 0 = no limit (if set to 0 ignore unreachable code warning)
-const float dockingSpeed = 0.5f; //[m/s]
-const float jobAreaSpeed = 10f;//[m/s] near the job area (between holes, backing out, arriving, leaving)
-
-//multiplied with ship size
-const float dockDist = 0.6f; //position in front of the home connector
-const float followPathDock = 2f; //stop following path, fly direct to target
-const float followPathJob = 1f; //same as dock
-const float useDockDirectionDist = 1f; //Override waypoint direction, use docking dir
-const float useJobDirectionDist = 0f; //same as dock
-
-//other distances
-const float wpReachedDist = 2f;//[m]
-const float drillRadius = 1.4f;//[m] grinders and modded drills (vanilla drills use their real cut radius)
-
-//grinding
-const float sensorRange = 2f;//fly slow when blocks found in this range
-const float fastSpeed = 10f;//speed when no blocks are detected
-
-//minimum acceleration in space before ship becomes too heavy
-const float minAccelerationSmall = 0.2f;//[m/s²] small ship
-const float minAccelerationLarge = 0.1f;//[m/s²] large ship
-
-//stone ejection
-const float minEjection = 25f;//[%] Min amount of ejected cargo to continue job
-
-//LCD
-const bool setLCDFontAndSize = true;
-
-//Obstacle brake: the ship's cameras scan where it flies and stop it when something is in the way.
-//A camera scans within 45° of where it faces: add cameras facing every direction the ship travels.
-const bool obstacleBrake = true;
-const float obstacleLookAhead = 3f;//[s] scan distance = speed * this + ship size
-const float obstacleTimeout = 10f;//[s] show "Path blocked" after holding this long
-
-//Traffic between PAM ships (needs an antenna): lanes, spacing, right of way, co-op holes (IMPORT JOB)
-const bool trafficEnabled = true;
-const float laneOffset = 0.75f;//x ship size: keep right of the path; 0 = fly on the path
-const float followGap = 1f;//x ship size: free space behind a PAM ship ahead
-
-const bool resumeAfterRestart = true;//continue a running job after a server restart / world load
-
-//Check if blocks are connected with conveyors
-const bool checkConveyorSystem = false;//temporarily disabled because of a SE bug
-
-//3D debug drawing (offline world + Digi's "(DevTool) Programmable Block DebugAPI" mod), see README
-const bool debugDraw = false;
+// ===== Settings =====
+// The settings are in this PB's Custom Data, in the [PAM settings] section (written with the
+// defaults on the first run; each script lists only the settings it uses). Edit them there, then
+// press Recompile. Delete a line to get its default back. They are kept when you paste a new
+// version of the script. Descriptions: README, section Settings.
 
 // ===== End of settings: don't edit below this line =====
+
+// ---- setting defaults (the values in Custom Data override them, see LoadSettings) ----
+String pamTag = "[PAM]";
+String controllerTag = "[PAM-Controller]";
+String dataTag = "[PAM-Data]";
+String dockPoolTag = "[PAM-Dock]";
+String zoneTag = "[PAM-Zone]";
+String laneTag = "[PAM-Lane]";
+float dockLaneLength = 40f;
+float dockRequestDistance = 300f;
+int gyroSpeedSmall = 15;
+int gyroSpeedLarge = 5;
+int generalSpeedLimit = 100;
+float dockingSpeed = 0.5f;
+float jobAreaSpeed = 10f;
+float dockDist = 0.6f;
+float followPathDock = 2f;
+float followPathJob = 1f;
+float useDockDirectionDist = 1f;
+float useJobDirectionDist = 0f;
+float wpReachedDist = 2f;
+float drillRadius = 1.4f;
+float sensorRange = 2f;
+float fastSpeed = 10f;
+float minAccelerationSmall = 0.2f;
+float minAccelerationLarge = 0.1f;
+float minEjection = 25f;
+bool setLCDFontAndSize = true;
+bool obstacleBrake = true;
+float obstacleLookAhead = 3f;
+float obstacleTimeout = 10f;
+bool trafficEnabled = true;
+float laneOffset = 0.75f;
+float followGap = 1f;
+bool resumeAfterRestart = true;
+const bool checkConveyorSystem = false; //temporarily disabled because of a SE bug
+bool debugDraw = false;
 
 // ========================== 02_Enums.cs ==========================
 // ========================== ENUMS ==========================
@@ -603,6 +582,7 @@ Program()
 {
     gridTerminalSystem = GridTerminalSystem;
     Runtime.UpdateFrequency = UpdateFrequency.Update10;
+    LoadSettings(); // PB Custom Data, before anything uses a setting
 
     if (HasTag(Me, controllerTag, true))
         shipMode = ShipMode.Controller;
@@ -642,6 +622,7 @@ Program()
         if (restoreResult == DataResult.Failed) statusMessage = "Data restore failed!";
         if (restoreResult == DataResult.NewVersion) statusMessage = "New version, wipe data";
     }
+    if (cfgBad != "") statusMessage = "Bad setting, default used: " + cfgBad;
 }
 
 // ========================== 06_Main.cs ==========================
@@ -4896,7 +4877,7 @@ void InitBroadcast()
         if (Me.CustomData.Contains("Antenna_Name"))
         {
             statusMessage = "Update custom data";
-            Me.CustomData = "";
+            Me.CustomData = SettingsBlock().Trim();
         }
     }
 
@@ -4949,7 +4930,7 @@ void InitBroadcastCustomData(String header)
 {
     String data = header + "\n\n" + "Enable_Broadcast=" + (shipMode == ShipMode.Controller ? "true" : "false") + " \n";
     data += shipMode != ShipMode.Controller ? "Ship_Name=Your_ship_name_here\n" : "";
-    Me.CustomData = data + "Broadcast_Channel=#default";
+    Me.CustomData = data + "Broadcast_Channel=#default" + SettingsBlock(); // keep the [PAM settings] section
 }
 
 String ParseCustomDataValue(String line)
@@ -7395,4 +7376,106 @@ String GetDebugDrawLegend()
         "Points: grey hole done, orange claimed, white free\n" +
         "Cyan sphere: docking area, purple: lane cameras\n" +
         "Thick green: ship cleared to its connector\n";
+}
+
+// ========================== 37_Settings.cs ==========================
+// ========================== SETTINGS (PB Custom Data) ==========================
+// The settings live in the [PAM settings] section of this PB's Custom Data, below the broadcast
+// settings. Read when the script compiles (Recompile after editing). Missing settings are written
+// with their defaults, so a new version adds its new settings by itself; a value that can't be
+// read keeps the default and is reported.
+
+const String CFG_MARK = "[PAM settings]";
+String[] cfgIn;
+String cfgOut = "", cfgBad = "";
+
+void LoadSettings()
+{
+    String nd = ApplySettings(Me.CustomData);
+    if (nd != Me.CustomData) Me.CustomData = nd;
+}
+
+// reads the settings from this Custom Data text, returns it with the settings section updated
+String ApplySettings(String cd)
+{
+    int at = cd.IndexOf(CFG_MARK);
+    cfgIn = at < 0 ? new String[0] : cd.Substring(at).Split('\n');
+    cfgOut = CFG_MARK + " edit, then Recompile. Delete a line to get its default. See README.\n";
+    cfgBad = "";
+    pamTag = CS("pamTag", pamTag);
+    controllerTag = CS("controllerTag", controllerTag);
+    dataTag = CS("dataTag", dataTag);
+    dockPoolTag = CS("dockPoolTag", dockPoolTag);
+    dockDist = CF("dockDist", dockDist);
+    drillRadius = CF("drillRadius", drillRadius);
+    minAccelerationSmall = CF("minAccelerationSmall", minAccelerationSmall);
+    minAccelerationLarge = CF("minAccelerationLarge", minAccelerationLarge);
+    setLCDFontAndSize = CB("setLCDFontAndSize", setLCDFontAndSize);
+    trafficEnabled = CB("trafficEnabled", trafficEnabled);
+    debugDraw = CB("debugDraw", debugDraw);
+    if (Me != null && HasTag(Me, controllerTag, true)) LoadControllerSettings(); else LoadShipSettings();
+    return (at < 0 ? (cd.Trim() == "" ? "" : cd.TrimEnd() + "\n\n") : cd.Substring(0, at)) + cfgOut;
+}
+
+void LoadShipSettings()
+{
+    dockRequestDistance = CF("dockRequestDistance", dockRequestDistance);
+    gyroSpeedSmall = (int)CF("gyroSpeedSmall", gyroSpeedSmall);
+    gyroSpeedLarge = (int)CF("gyroSpeedLarge", gyroSpeedLarge);
+    generalSpeedLimit = (int)CF("generalSpeedLimit", generalSpeedLimit);
+    dockingSpeed = CF("dockingSpeed", dockingSpeed);
+    jobAreaSpeed = CF("jobAreaSpeed", jobAreaSpeed);
+    followPathDock = CF("followPathDock", followPathDock);
+    followPathJob = CF("followPathJob", followPathJob);
+    useDockDirectionDist = CF("useDockDirectionDist", useDockDirectionDist);
+    useJobDirectionDist = CF("useJobDirectionDist", useJobDirectionDist);
+    wpReachedDist = CF("wpReachedDist", wpReachedDist);
+    sensorRange = CF("sensorRange", sensorRange);
+    fastSpeed = CF("fastSpeed", fastSpeed);
+    minEjection = CF("minEjection", minEjection);
+    obstacleBrake = CB("obstacleBrake", obstacleBrake);
+    obstacleLookAhead = CF("obstacleLookAhead", obstacleLookAhead);
+    obstacleTimeout = CF("obstacleTimeout", obstacleTimeout);
+    laneOffset = CF("laneOffset", laneOffset);
+    followGap = CF("followGap", followGap);
+    resumeAfterRestart = CB("resumeAfterRestart", resumeAfterRestart);
+}
+
+void LoadControllerSettings()
+{
+    zoneTag = CS("zoneTag", zoneTag);
+    laneTag = CS("laneTag", laneTag);
+    dockLaneLength = CF("dockLaneLength", dockLaneLength);
+}
+
+// the setting's value from Custom Data (or the default), written back to the section
+String CS(String key, String def)
+{
+    String v = def;
+    for (int i = 1; i < cfgIn.Length; i++)
+        if (cfgIn[i].StartsWith(key + "=")) v = cfgIn[i].Substring(key.Length + 1).Trim();
+    cfgOut += key + "=" + v + "\n";
+    return v;
+}
+
+float CF(String key, float def)
+{
+    float f;
+    if (float.TryParse(CS(key, "" + def), out f)) return f;
+    cfgBad += key + " ";
+    return def;
+}
+
+bool CB(String key, bool def)
+{
+    String v = CS(key, def ? "true" : "false").ToLower();
+    if (v != "true" && v != "false") cfgBad += key + " ";
+    return v == "true" || (v != "false" && def);
+}
+
+// the settings section, kept when the broadcast settings are rewritten
+String SettingsBlock()
+{
+    int at = Me.CustomData.IndexOf(CFG_MARK);
+    return at < 0 ? "" : "\n\n" + Me.CustomData.Substring(at);
 }

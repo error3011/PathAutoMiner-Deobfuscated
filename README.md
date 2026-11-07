@@ -46,7 +46,11 @@ The original script is published as a single minified/obfuscated file. This proj
 │   ├── 30_Traffic.cs           # Lanes, spacing, co-op mining (new)
 │   ├── 31_DockPool.cs          # Ship-to-ship dock pool (new)
 │   ├── 32_DockControl.cs       # Station dock control, controller side (new)
-│   └── 33_DockClearance.cs     # Dock clearance, ship side (new)
+│   ├── 33_DockClearance.cs     # Dock clearance, ship side (new)
+│   ├── 34_JobCoordinator.cs    # Controller: co-op job record, hole assignment (new)
+│   ├── 35_TrafficControl.cs    # Controller: traffic control, staged "Move home" (new)
+│   ├── 36_DebugDraw.cs         # Controller: 3D debug drawing via the DebugAPI mod (new)
+│   └── 37_Settings.cs          # Settings in the PB's Custom Data (new)
 ├── tools/
 │   ├── build_pam.py            # Combines src/, minifies, writes the ship/controller scripts
 │   ├── minify_pam.py           # Minifies into SE-ready script
@@ -126,9 +130,46 @@ The programmable block limit is 100,000 characters, and one script with both the
 
 Pasting the wrong one is harmless: the PB just says which file it needs. `PAM_Minified.cs` (both modes in one script) no longer fits under the limit and is only kept as a build check.
 
+## Settings
+
+The settings are in the **Custom Data of the programmable block**, in the `[PAM settings]` section below the broadcast settings. The script writes the section with the defaults the first time it runs. To change a setting, edit the value there and press **Recompile**. Delete a line to get its default back. The settings stay when you paste a new version of the script, and a new version adds its new settings by itself. A value that can't be read keeps its default and the PB says "Bad setting, default used: <name>". Each script lists only the settings it uses.
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `pamTag` | `[PAM]` | both | Tag of the PAM PB and its LCDs (`[PAM:<lcdIndex>]`, e.g. `[PAM:1]`) |
+| `controllerTag` | `[PAM-Controller]` | both | Tag that makes a PB the controller |
+| `dataTag` | `[PAM-Data]` | both | Block whose Custom Data EXPORT/IMPORT use |
+| `dockPoolTag` | `[PAM-Dock]` | both | Station connectors ships may use when their home dock is taken |
+| `zoneTag` | `[PAM-Zone]` | controller | Sensor over the docking area: nobody is cleared while another ship moves in it |
+| `laneTag` | `[PAM-Lane]` | controller | Camera at a connector facing out along its approach: the lane must be clear |
+| `dockLaneLength` | 40 | controller | [m] how far the lane cameras check |
+| `dockRequestDistance` | 300 | ship | [m] ships ask for clearance this close to home, then wait outside the zone |
+| `gyroSpeedSmall` / `gyroSpeedLarge` | 15 / 5 | ship | [RPM] gyro speed of small / large ships |
+| `generalSpeedLimit` | 100 | ship | [m/s] 0 = no limit |
+| `dockingSpeed` | 0.5 | ship | [m/s] final approach to the connector |
+| `jobAreaSpeed` | 10 | ship | [m/s] near the job area (between holes, backing out, arriving, leaving) |
+| `dockDist` | 0.6 | both | x ship size: approach point in front of the home connector |
+| `followPathDock` / `followPathJob` | 2 / 1 | ship | x ship size: stop following the path and fly straight to the dock / job |
+| `useDockDirectionDist` / `useJobDirectionDist` | 1 / 0 | ship | x ship size: use the dock's / job's orientation instead of the waypoint's |
+| `wpReachedDist` | 2 | ship | [m] waypoint reached |
+| `drillRadius` | 1.4 | both | [m] cut radius of grinders and modded drills (vanilla drills use their real radius) |
+| `sensorRange` | 2 | ship | grinding: fly slow when blocks are found in this range |
+| `fastSpeed` | 10 | ship | grinding: speed when no blocks are detected |
+| `minAccelerationSmall` / `minAccelerationLarge` | 0.2 / 0.1 | both | [m/s²] minimum acceleration in space before the ship counts as too heavy |
+| `minEjection` | 25 | ship | [%] minimum ejected cargo to continue the job |
+| `setLCDFontAndSize` | true | both | set font and size of the LCDs |
+| `obstacleBrake` | true | ship | camera obstacle brake |
+| `obstacleLookAhead` | 3 | ship | [s] scan distance = speed x this + ship size |
+| `obstacleTimeout` | 10 | ship | [s] show "Path blocked" after holding this long |
+| `trafficEnabled` | true | both | traffic between PAM ships (lanes, spacing, right of way, co-op holes) |
+| `laneOffset` | 0.75 | ship | x ship size: keep right of the path; 0 = fly on the path |
+| `followGap` | 1 | ship | x ship size: free space behind a PAM ship ahead |
+| `resumeAfterRestart` | true | ship | continue a running job after a server restart / world load |
+| `debugDraw` | false | both | 3D debug drawing (offline world + DebugAPI mod) |
+
 ## Multiple ships: obstacle brake, traffic and co-op mining
 
-All three are on by default and can be turned off in the settings block at the top of the script.
+All three are on by default and can be turned off in the settings (see Settings below).
 
 - **Docking approach:** the camera sweep also runs on the way from the path end to the connector. Anything right at the approach point (the station around the connector) doesn't count. Blocked there for 4 s, the ship tries to go around: one ship size up, right, left and down from the straight line, one after the other, and from the point beside the obstacle straight to the connector again. If none works it stays where it is ("Docking blocked: <type>, stopped").
 - **Obstacle brake:** the ship uses its own camera blocks to raycast where it's flying (its velocity once it moves, otherwise towards its flight target), and holds position while something is in the way. Each run casts one ray along the centre of the flight line and one to the next of 8 edge points: the four edges of the ship at the scan distance and at half of it, so blocks only the ship's edge would clip are found too. Each ray comes from the camera that faces that point best and has charge left. The edge rays look for blocks only; terrain is checked on the centre line, so low paths don't trigger it. A full sweep without a hit releases the hold. Hits on the ship's own subgrids (rotors, pistons) are ignored. The info page lists which ship directions the cameras cover; if no camera can look where the ship is going for 2 s, it says "Cameras can't see ahead". It's active during path flights and hole-to-hole moves, and off while mining, backing out of a hole and docking. A camera only scans within 45° of where it faces, so put cameras facing each direction the ship travels: forward, and sideways or up and down for the moves between holes. After `obstacleTimeout` seconds the ship shows "Path blocked: <type>" (also on the controller). Terrain (planet, asteroid) doesn't count on moves between holes (the drills are on and the hole tops sit on the ground), or right at the flight target.
@@ -154,7 +195,7 @@ Behaviour follows the original script (`PAM_ORIGINAL.cs`). Fixes on top of it:
 - **EXPORT / IMPORT:** `EXPORT` copies the path, home dock, job position, mining area and settings into the Custom Data of a block named `[PAM-Data]`; `IMPORT` loads them back (a running job comes back paused). Use it as a backup, or to copy a setup to an identical ship. The game limits Custom Data to 64,000 characters, about 400 waypoints; a bigger export is refused with a message instead of being cut off.
 - **Errors:** after an exception, run the PB with the argument `RETRY` to restart without recompiling.
 - **Move home for all ships** (controller, *Send command to all*): every ship gets the order at once (so none starts a new hole), and the controller lets them leave one at a time, holding the others where they are (in their holes, or hovering). Ships already out of the job area go first, then ships at the surface, then ships still deep in their holes; in each group the ship closest to the job position (where the path starts) goes first. The next ship may leave when the previous one has moved 3 ship sizes away (at least 40 m), right away if the previous one was docked, or after 45 s at the latest. The command result shows which ships are still waiting to leave. Any other command cancels the queue.
-- **Debug drawing in 3D** (offline worlds): add Digi's *(DevTool) Programmable Block DebugAPI* mod (Workshop 2654858862) to an offline world, and set `debugDraw = true` in the settings of the controller PB and of the ships. The mod doesn't work in multiplayer: on a server it does nothing, so leave `debugDraw` off there. The controller then draws, refreshed twice a second:
+- **Debug drawing in 3D** (offline worlds): add Digi's *(DevTool) Programmable Block DebugAPI* mod (Workshop 2654858862) to an offline world, and set `debugDraw=true` in the [PAM settings] section of the Custom Data of the controller PB and of the ships (then Recompile). The mod doesn't work in multiplayer: on a server it does nothing, so leave `debugDraw` off there. The controller then draws, refreshed twice a second:
   - every PAM ship as a wire sphere of its size: green moving, yellow giving way, grey parked. A white line shows where it will be in 3 s, a cyan line the way it wants to go.
   - a red line between two ships the controller sees on a collision course.
   - from the ships: a blue line to the flight target, the camera rays (green clear, red hit), and each job's hole grid: grey done, orange claimed (with a line from the ship to its hole), white free.

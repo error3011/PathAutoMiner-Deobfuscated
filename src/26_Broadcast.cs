@@ -88,7 +88,7 @@ void InitBroadcast()
         if (Me.CustomData.Contains("Antenna_Name"))
         {
             statusMessage = "Update custom data";
-            Me.CustomData = "";
+            Me.CustomData = SettingsBlock().Trim();
         }
     }
 
@@ -141,7 +141,7 @@ void InitBroadcastCustomData(String header)
 {
     String data = header + "\n\n" + "Enable_Broadcast=" + (shipMode == ShipMode.Controller ? "true" : "false") + " \n";
     data += shipMode != ShipMode.Controller ? "Ship_Name=Your_ship_name_here\n" : "";
-    Me.CustomData = data + "Broadcast_Channel=#default";
+    Me.CustomData = data + "Broadcast_Channel=#default" + SettingsBlock(); // keep the [PAM settings] section
 }
 
 String ParseCustomDataValue(String line)

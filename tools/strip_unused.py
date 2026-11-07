@@ -22,14 +22,18 @@ ROOTS = {"Main", "Program", "Save"}
 
 VARIANTS = {
     "ship": {
-        "remove": ["ControllerMainLoop"],
-        "stub": 'void ControllerMainLoop(string argument) { Echo("[PAM] This is the ship script.\\n'
-                'Paste PAM_Controller.cs into the [PAM-Controller] PB."); }',
+        "stubs": {
+            "ControllerMainLoop": 'void ControllerMainLoop(string argument) { Echo("[PAM] This is the ship script.\\n'
+                                  'Paste PAM_Controller.cs into the [PAM-Controller] PB."); }',
+            "LoadControllerSettings": 'void LoadControllerSettings() { }',
+        },
     },
     "controller": {
-        "remove": ["ShipMainLoop"],
-        "stub": 'void ShipMainLoop(string argument) { Echo("[PAM] This is the controller script.\\n'
-                'Paste PAM_Ship.cs into the ship PB, or add [PAM-Controller] to this PB\'s name."); }',
+        "stubs": {
+            "ShipMainLoop": 'void ShipMainLoop(string argument) { Echo("[PAM] This is the controller script.\\n'
+                            'Paste PAM_Ship.cs into the ship PB, or add [PAM-Controller] to this PB\'s name."); }',
+            "LoadShipSettings": 'void LoadShipSettings() { }',
+        },
     },
 }
 
@@ -187,9 +191,10 @@ def make_variant(source, variant):
             items[i]["text"] = items[i]["text"][m.end():]
             items[i]["name"] = _method_name(items[i]["text"])
 
-    remove = set(cfg["remove"])
-    items = [it for it in items if it["name"] not in remove]
-    items.append({"text": "\n" + cfg["stub"] + "\n", "name": cfg["remove"][0]})
+    stubs = cfg["stubs"]
+    items = [it for it in items if it["name"] not in stubs]
+    for name, stub in stubs.items():
+        items.append({"text": "\n" + stub + "\n", "name": name})
 
     # fields and types are dropped too when nothing that is kept uses them
     for it in items:

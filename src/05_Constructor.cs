@@ -4,6 +4,7 @@ Program()
 {
     gridTerminalSystem = GridTerminalSystem;
     Runtime.UpdateFrequency = UpdateFrequency.Update10;
+    LoadSettings(); // PB Custom Data, before anything uses a setting
 
     if (HasTag(Me, controllerTag, true))
         shipMode = ShipMode.Controller;
@@ -43,4 +44,5 @@ Program()
         if (restoreResult == DataResult.Failed) statusMessage = "Data restore failed!";
         if (restoreResult == DataResult.NewVersion) statusMessage = "New version, wipe data";
     }
+    if (cfgBad != "") statusMessage = "Bad setting, default used: " + cfgBad;
 }
