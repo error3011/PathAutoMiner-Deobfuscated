@@ -44,6 +44,7 @@ void LoadShipSettings()
     generalSpeedLimit = (int)CF("generalSpeedLimit", generalSpeedLimit);
     dockingSpeed = CF("dockingSpeed", dockingSpeed);
     jobAreaSpeed = CF("jobAreaSpeed", jobAreaSpeed);
+    dockAreaSpeed = CF("dockAreaSpeed", dockAreaSpeed);
     followPathDock = CF("followPathDock", followPathDock);
     followPathJob = CF("followPathJob", followPathJob);
     useDockDirectionDist = CF("useDockDirectionDist", useDockDirectionDist);

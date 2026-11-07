@@ -106,6 +106,8 @@ void HandleJobTraffic(String data)
         job.done = new String(c);
     }
     long id = long.Parse(f[0]);
+    // the ship works this job now: drop it from any other job record (an old job then disappears)
+    for (int j = 0; j < jobs.Count; j++) if (jobs[j] != job) jobs[j].ships.RemoveAll(o => o.id == id);
     JobShip s = null;
     for (int i = 0; i < job.ships.Count; i++) if (job.ships[i].id == id) s = job.ships[i];
     if (s == null) { s = new JobShip(); s.id = id; job.ships.Add(s); }

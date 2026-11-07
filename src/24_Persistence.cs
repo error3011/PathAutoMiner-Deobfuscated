@@ -257,6 +257,7 @@ void ImportText(String data, bool jobOnly)
     if (result == DataResult.Success)
     {
         needPositionUpdate = false;
+        myHole = -1; // a claimed hole belongs to the exporting ship, never copied
         statusMessage = "Imported " + waypoints.Count + " waypoints";
         return;
     }

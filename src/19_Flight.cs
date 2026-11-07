@@ -18,6 +18,9 @@ void UpdateFlight()
     if (pathBlocked) maxSpeed = 0; // obstacle brake: cancel velocity and hold position
     if (trafficSpeedLimit >= 0) maxSpeed = Math.Min(maxSpeed, trafficSpeedLimit); // keep distance to a PAM ship ahead
     if (NearJobArea()) maxSpeed = Math.Min(maxSpeed, jobAreaSpeed); // slow and steady next to the other ships
+    NavState n = currentNavState; // docking area: from the queue to the connector and back out
+    if (n == NavState.ApproachDock || n == NavState.AlignDock || n == NavState.RetryDocking || n == NavState.Undocking ||
+        (n == NavState.FlyToDockArea && InDockZone(shipPosition))) maxSpeed = Math.Min(maxSpeed, dockAreaSpeed);
     if (softApproach) maxSpeed *= (float)Math.Min(1, SafeDiv(toTarget.Length(), wpReachedDist) / 2);
 
     Vector3 localVelocity = LocalTransformDirection(remoteControl, remoteControl.GetShipVelocities().LinearVelocity);

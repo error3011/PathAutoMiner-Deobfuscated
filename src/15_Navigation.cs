@@ -122,7 +122,7 @@ void UpdateNavigation()
         else
         {
             // co-op: a ship with a lower id claimed this hole (or one next to it) at the same moment -> pick again
-            if (myHole >= 0 && (JobCoordinated() ? coordCell >= 0 && coordCell != myHole : HoleConflict(myHole, true))) { stuckCounter = 0; return; }
+            if (myHole >= 0 && (JobCoordinated() ? (coordCell >= 0 && coordCell != myHole) || coordOthers.Contains(myHole) : HoleConflict(myHole, true))) { stuckCounter = 0; return; }
             if (distToTarget < wpReachedDist)
             {
                 if (Vector3.Distance(navTargetPos, miningTargetPos) > 1) { SetFlightTarget(miningTargetPos, 10); return; } // over the hole: down

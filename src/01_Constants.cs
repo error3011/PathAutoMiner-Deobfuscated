@@ -38,6 +38,7 @@ int gyroSpeedLarge = 5;
 int generalSpeedLimit = 100;
 float dockingSpeed = 0.5f;
 float jobAreaSpeed = 10f;
+float dockAreaSpeed = 5f;
 float dockDist = 0.6f;
 float followPathDock = 2f;
 float followPathJob = 1f;

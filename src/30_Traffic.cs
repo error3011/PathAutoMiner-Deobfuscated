@@ -167,6 +167,7 @@ Vector3 GetLaneOffset(int idx, int pathDir)
 // ---- spacing ----
 
 Vector3 trafficMyVel = new Vector3();
+bool sidestep = false; // moving out of the way of a passing ship
 List<String> debugRays = new List<String>();
 
 // Docking, undocking and backing out of a hole: traffic only slows/holds the ship, no side step
@@ -241,7 +242,7 @@ void ParseTrafficControl(String data)
 // on top of the ship's own avoidance, after its 15 s escape: the controller sees all ships
 void ApplyTrafficControl()
 {
-    if (tccLimit < 0 || (DateTime.Now - tccTime).TotalSeconds > 1.5) return;
+    if (tccLimit < 0 || (DateTime.Now - tccTime).TotalSeconds > 1.5 || sidestep) return; // moving aside resolves it
     trafficSpeedLimit = trafficSpeedLimit < 0 ? tccLimit : Math.Min(trafficSpeedLimit, tccLimit);
     if (tccLimit < 0.5f) statusMessage = "Traffic: giving way (controller)";
 }
@@ -259,6 +260,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
     Vector3 right = Vector3.Cross(dir, up);
     right = right.LengthSquared() < 0.0001f ? -leftDirection : Vector3.Normalize(right);
     TrafficShip limiter = null;
+    bool cpaHold = false; // held for a collision course: stop, don't move aside
     bool goingHome = currentNavState == NavState.FlyToDockArea && !StationCleared(1); // lines up in the dock queue
     int myPrio = TrafficPrio();
 
@@ -327,7 +329,28 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         if (rv2 < 0.25f) continue;
         float t = -Vector3.Dot(rel, rv) / rv2;
         if (t <= 0 || t > 5f || (rel + rv * t).Length() >= (sideBySide ? clear : clear * 1.1f)) continue;
-        if (other.prio > myPrio || (other.prio == myPrio && !GoesFirst(targetDist, other)) || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
+        if (other.prio > myPrio || (other.prio == myPrio && !GoesFirst(targetDist, other)) || t < 2f) { trafficSpeedLimit = 0; limiter = other; cpaHold = true; }
+    }
+
+    // giving way to a ship that is coming through where I am: move slowly out of its way, sideways
+    // from its line (only in free flight; the camera brake stops it if there's no room there)
+    sidestep = false;
+    if (!precise && !cpaHold && limiter != null && trafficSpeedLimit < 0.5f && shipSpeed < 1 && limiter.vel.Length() > 1)
+    {
+        Vector3 od = Vector3.Normalize(limiter.vel);
+        Vector3 rel = shipPosition - limiter.pos;
+        float along = Vector3.Dot(rel, od);
+        Vector3 lat = rel - od * along;
+        float clear = (shipDiameter + limiter.diameter) * 0.6f;
+        if (along > 0 && lat.Length() < clear)
+        {
+            Vector3 away = lat.Length() > 0.5f ? Vector3.Normalize(lat) : Vector3.Normalize(Vector3.Cross(od, up));
+            trafficShift = shipPosition + away * clear - navTargetPos; // fly to the point beside its line
+            trafficSpeedLimit = 2;
+            sidestep = true;
+            statusMessage = "Traffic: moving aside";
+            return;
+        }
     }
 
     // safety net: held by traffic for too long -> stop waiting for a while and pass on the right
@@ -441,7 +464,8 @@ int ClaimHole(int idx)
         // the [PAM-Controller] assigns the holes
         if (coordCell >= 0 && !IsHoleDone(coordCell)) { holeWanted = false; myHole = coordCell; return holeCells.IndexOf(coordCell); }
         if (coordCell == -2) { myHole = -1; holeWanted = doneHoles.IndexOf('0') >= 0; return holeWanted ? -2 : n; } // all taken: wait (keep asking), all done: done
-        if (coordCell == -1 && myHole >= 0 && !IsHoleDone(myHole)) { holeWanted = false; return idx; } // controller doesn't know it yet: keep it
+        // controller doesn't know this ship's hole yet: keep it, unless it gave that hole to another ship
+        if (coordCell == -1 && myHole >= 0 && !IsHoleDone(myHole) && !coordOthers.Contains(myHole)) { holeWanted = false; return idx; }
         myHole = -1;
         if (!holeWanted) { holeWanted = true; coordWaitSince = DateTime.Now; }
         if ((DateTime.Now - coordWaitSince).TotalSeconds < 5) return -1; // wait for the answer
@@ -471,6 +495,7 @@ IMyBroadcastListener coordListener = null;
 DateTime coordTime = DateTime.MinValue;
 DateTime coordWaitSince = DateTime.Now;
 int coordCell = -1; // -1 none assigned (yet), -2 nothing left for this ship
+List<int> coordOthers = new List<int>(); // holes the controller has given to other ships
 bool holeWanted = false;
 
 // coordCell -3: the controller's job state doesn't list this ship (it can't hear it): peer rules
@@ -483,9 +508,14 @@ void ParseJobState(String data)
     coordTime = DateTime.Now;
     MergeDoneHoles(f[2]);
     coordCell = -3;
+    coordOthers.Clear();
     String me = myGridId + ":";
     String[] e = f[3].Split(',');
-    for (int i = 0; i < e.Length; i++) if (e[i].StartsWith(me)) coordCell = int.Parse(e[i].Substring(me.Length));
+    for (int i = 0; i < e.Length; i++)
+    {
+        int c = int.Parse(e[i].Substring(e[i].IndexOf(':') + 1));
+        if (e[i].StartsWith(me)) coordCell = c; else coordOthers.Add(c);
+    }
 }
 
 // hole index -> holeCol/holeRow, like GetNextHolePosition
