@@ -41,7 +41,7 @@ const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
 int trafficTick = 0;
 String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
 int myHole = -1;              // grid cell of the hole this ship works on
-bool coopWaiting = false;
+bool coopWaiting = false, coopWaitAside = false;
 Vector3 coopWaitPos = new Vector3();
 
 String JobKey()
@@ -381,8 +381,9 @@ bool HoleConflict(int cell, bool keeping)
 }
 
 // Called before flying to hole idx (index in the mining order). Returns the next free hole index,
-// or jobWidth * jobHeight when every hole is finished or being mined by another ship (this ship's
-// part of the job is done). A single ship gets its holes in the original order.
+// -1 while waiting for the controller's answer, -2 when every hole left is taken by other ships
+// (wait for one), or jobWidth * jobHeight when every hole is finished. A single ship gets its
+// holes in the original order.
 int ClaimHole(int idx)
 {
     int n = jobWidth * jobHeight;
@@ -396,7 +397,7 @@ int ClaimHole(int idx)
     {
         // the [PAM-Controller] assigns the holes
         if (coordCell >= 0 && !IsHoleDone(coordCell)) { holeWanted = false; myHole = coordCell; return holeCells.IndexOf(coordCell); }
-        if (coordCell == -2) { holeWanted = false; myHole = -1; return n; } // nothing left for this ship
+        if (coordCell == -2) { myHole = -1; holeWanted = doneHoles.IndexOf('0') >= 0; return holeWanted ? -2 : n; } // all taken: wait (keep asking), all done: done
         if (coordCell == -1 && myHole >= 0 && !IsHoleDone(myHole)) { holeWanted = false; return idx; } // controller doesn't know it yet: keep it
         myHole = -1;
         if (!holeWanted) { holeWanted = true; coordWaitSince = DateTime.Now; }
@@ -412,7 +413,7 @@ int ClaimHole(int idx)
         myHole = c;
         return k;
     }
-    return n;
+    return doneHoles.IndexOf('0') >= 0 ? -2 : n; // holes left, all taken by other ships: wait for one
 }
 
 // ---- job coordination by the [PAM-Controller] ----

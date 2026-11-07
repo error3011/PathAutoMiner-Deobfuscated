@@ -2215,9 +2215,17 @@ void UpdateNavigation()
             int claimed = ClaimHole(currentHoleIndex);
             if (claimed < 0)
             {
-                if (!coopWaiting) { coopWaiting = true; coopWaitPos = shipPosition; }
-                SetFlightTarget(coopWaitPos, 0);
-                statusMessage = "Waiting for the controller";
+                if (!CheckEnergy()) { SetNavState(NavState.ReturnToDock); return; }
+                // -1: short wait for the controller's answer, where it is. -2: every hole left is taken:
+                // wait beside the job area, backed off from the surface, out of the other ships' way
+                if (!coopWaiting || (claimed == -2) != coopWaitAside)
+                {
+                    coopWaiting = true; coopWaitAside = claimed == -2;
+                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter +
+                        jobPosition.leftDir * (jobWidth * toolWidth / 2 + shipFootWidth / 2 + shipDiameter / 2);
+                }
+                SetFlightTarget(coopWaitPos, 10);
+                statusMessage = coopWaitAside ? "Waiting for a free hole" : "Waiting for the controller";
                 return;
             }
             coopWaiting = false;
@@ -2226,11 +2234,8 @@ void UpdateNavigation()
             if (result == SpiralResult.AllDone)
             {
                 jobState = JobState.Done;
-                // co-op: holes are left, but all of them are taken by other ships (or too close to them):
-                // leave the job area instead of hovering in the other ships' way
-                bool othersWorking = doneHoles.IndexOf('0') >= 0;
-                statusMessage = othersWorking ? "No free hole left for this ship" : "Job done";
-                if ((whenDoneReturnHome || othersWorking) && homeDock.isSet) { SetNavState(NavState.FlyToPath); SetStopAtState(NavState.Unloading); lastJobState = JobState.MoveHome; }
+                statusMessage = "Job done";
+                if (whenDoneReturnHome && homeDock.isSet) { SetNavState(NavState.FlyToPath); SetStopAtState(NavState.Unloading); lastJobState = JobState.MoveHome; }
                 else { SetNavState(NavState.FlyToJobPos); SetStopAtState(NavState.AlignJob); lastJobState = JobState.MoveToJob; }
                 return;
             }
@@ -5654,7 +5659,7 @@ const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
 int trafficTick = 0;
 String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
 int myHole = -1;              // grid cell of the hole this ship works on
-bool coopWaiting = false;
+bool coopWaiting = false, coopWaitAside = false;
 Vector3 coopWaitPos = new Vector3();
 
 String JobKey()
@@ -5994,8 +5999,9 @@ bool HoleConflict(int cell, bool keeping)
 }
 
 // Called before flying to hole idx (index in the mining order). Returns the next free hole index,
-// or jobWidth * jobHeight when every hole is finished or being mined by another ship (this ship's
-// part of the job is done). A single ship gets its holes in the original order.
+// -1 while waiting for the controller's answer, -2 when every hole left is taken by other ships
+// (wait for one), or jobWidth * jobHeight when every hole is finished. A single ship gets its
+// holes in the original order.
 int ClaimHole(int idx)
 {
     int n = jobWidth * jobHeight;
@@ -6009,7 +6015,7 @@ int ClaimHole(int idx)
     {
         // the [PAM-Controller] assigns the holes
         if (coordCell >= 0 && !IsHoleDone(coordCell)) { holeWanted = false; myHole = coordCell; return holeCells.IndexOf(coordCell); }
-        if (coordCell == -2) { holeWanted = false; myHole = -1; return n; } // nothing left for this ship
+        if (coordCell == -2) { myHole = -1; holeWanted = doneHoles.IndexOf('0') >= 0; return holeWanted ? -2 : n; } // all taken: wait (keep asking), all done: done
         if (coordCell == -1 && myHole >= 0 && !IsHoleDone(myHole)) { holeWanted = false; return idx; } // controller doesn't know it yet: keep it
         myHole = -1;
         if (!holeWanted) { holeWanted = true; coordWaitSince = DateTime.Now; }
@@ -6025,7 +6031,7 @@ int ClaimHole(int idx)
         myHole = c;
         return k;
     }
-    return n;
+    return doneHoles.IndexOf('0') >= 0 ? -2 : n; // holes left, all taken by other ships: wait for one
 }
 
 // ---- job coordination by the [PAM-Controller] ----

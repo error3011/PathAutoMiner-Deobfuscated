@@ -77,9 +77,17 @@ void UpdateNavigation()
             int claimed = ClaimHole(currentHoleIndex);
             if (claimed < 0)
             {
-                if (!coopWaiting) { coopWaiting = true; coopWaitPos = shipPosition; }
-                SetFlightTarget(coopWaitPos, 0);
-                statusMessage = "Waiting for the controller";
+                if (!CheckEnergy()) { SetNavState(NavState.ReturnToDock); return; }
+                // -1: short wait for the controller's answer, where it is. -2: every hole left is taken:
+                // wait beside the job area, backed off from the surface, out of the other ships' way
+                if (!coopWaiting || (claimed == -2) != coopWaitAside)
+                {
+                    coopWaiting = true; coopWaitAside = claimed == -2;
+                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter +
+                        jobPosition.leftDir * (jobWidth * toolWidth / 2 + shipFootWidth / 2 + shipDiameter / 2);
+                }
+                SetFlightTarget(coopWaitPos, 10);
+                statusMessage = coopWaitAside ? "Waiting for a free hole" : "Waiting for the controller";
                 return;
             }
             coopWaiting = false;
@@ -88,11 +96,8 @@ void UpdateNavigation()
             if (result == SpiralResult.AllDone)
             {
                 jobState = JobState.Done;
-                // co-op: holes are left, but all of them are taken by other ships (or too close to them):
-                // leave the job area instead of hovering in the other ships' way
-                bool othersWorking = doneHoles.IndexOf('0') >= 0;
-                statusMessage = othersWorking ? "No free hole left for this ship" : "Job done";
-                if ((whenDoneReturnHome || othersWorking) && homeDock.isSet) { SetNavState(NavState.FlyToPath); SetStopAtState(NavState.Unloading); lastJobState = JobState.MoveHome; }
+                statusMessage = "Job done";
+                if (whenDoneReturnHome && homeDock.isSet) { SetNavState(NavState.FlyToPath); SetStopAtState(NavState.Unloading); lastJobState = JobState.MoveHome; }
                 else { SetNavState(NavState.FlyToJobPos); SetStopAtState(NavState.AlignJob); lastJobState = JobState.MoveToJob; }
                 return;
             }
