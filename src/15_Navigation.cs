@@ -460,10 +460,19 @@ void UpdateNavigation()
         WaypointInfo dock = GetCurrentDock();
         if (stateFirstTick)
         {
-            if (!GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos))
+            if (!GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos) || !GetDockApproachPosition(dock, (dockDist + 1) * shipDiameter, true, out laneEntry))
             { ShowStatusMessage(StatusMsg.ConnectorNotReady); StopAll(); return; }
-            SetFlightTarget(navTargetPos, 0);
+            // straight lane in front of the connector: off its line -> first to the lane entry, then straight in (no diagonal past docked ships)
+            toLane = OffLane(navTargetPos);
+            SetFlightTarget(toLane ? laneEntry : navTargetPos, 0);
             AlignToGravity(dock.downDir, 90, true);
+        }
+        if (toLane && distToTarget < wpReachedDist && distToTarget != -1)
+        {
+            toLane = false;
+            GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos);
+            SetFlightTarget(navTargetPos, 0);
+            return;
         }
         if (distToTarget < followPathDock * shipDiameter && distToTarget != -1)
         {
@@ -693,17 +702,20 @@ void UpdateNavigation()
 
             if (dock != null)
             {
-                if (!GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos))
+                if (!GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos) || !GetDockApproachPosition(dock, (dockDist + 1) * shipDiameter, true, out laneEntry))
                 { ShowStatusMessage(StatusMsg.ConnectorNotReady); StopAll(); return; }
                 SetFlightTarget(navTargetPos, 5);
                 AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false);
             }
             else SetFlightTarget(shipPosition + other.WorldMatrix.Forward * dockDist * shipDiameter, 5);
+            toLane = dock != null;
 
             if (jobState == JobState.Active) ShowStatusMessage(StatusMsg.Running);
         }
         if (distToTarget < wpReachedDist)
         {
+            // back out straight along the connector lane to its entry, then on
+            if (toLane) { toLane = false; SetFlightTarget(laneEntry, 5); return; }
             SetBlocksEnabled(connectors, true);
             SetNavState(NavState.FlyToJobArea);
             return;

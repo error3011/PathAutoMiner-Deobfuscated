@@ -107,6 +107,13 @@ void SetDockTarget(WaypointInfo dock, JobState state)
     if (jobState == JobState.Active) lastJobState = state;
 }
 
+// docking lane: is the ship off the straight line from approach point p out to laneEntry?
+bool OffLane(Vector3 p)
+{
+    Vector3 d = Vector3.Normalize(laneEntry - p), v = shipPosition - p;
+    return (v - d * Vector3.Dot(v, d)).Length() > wpReachedDist;
+}
+
 bool GetDockApproachPosition(WaypointInfo dock, float dist, bool useConnector, out Vector3 pos)
 {
     if (useConnector)

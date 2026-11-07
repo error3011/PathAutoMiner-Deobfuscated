@@ -27,6 +27,7 @@ DateTime blockedSince = DateTime.Now;
 String blockedBy = "";
 String cameraCoverage = "";
 Vector3 detourShift = new Vector3(); // docking approach: way around an obstacle
+Vector3 laneEntry; bool toLane; // straight connector lane: entry point, flying to it
 int detourStep = 0; // ship directions some camera can scan (info page)
 
 void ScanCameras()
