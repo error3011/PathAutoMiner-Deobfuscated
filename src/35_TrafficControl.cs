@@ -89,9 +89,12 @@ void ComputeTrafficControl()
             Vector3 rel = pb - pa;
             float dist = rel.Length();
             float clear = (a.dia + b.dia) * 0.55f;
-            // two ships working the same job side by side: their size across the drill face
-            if (a.inJob && b.inJob && a.job != "" && a.job == b.job && a.fw > 0 && b.fw > 0)
-                clear = Math.Max(a.fw + b.fw, a.fh + b.fh) * 0.5f + 0.5f;
+            // two ships working the same job drill different holes: only closer than one hole spacing counts
+            if (a.inJob && b.inJob && a.job != "" && a.job == b.job)
+            {
+                String[] k = a.job.Split('|');
+                if (k.Length >= 8) clear = Math.Min(float.Parse(k[6]), float.Parse(k[7])) * 0.9f;
+            }
             Vector3 ru = ub - ua;
             float ru2 = ru.LengthSquared();
             float t = ru2 > 0.01f ? -Vector3.Dot(rel, ru) / ru2 : 0;

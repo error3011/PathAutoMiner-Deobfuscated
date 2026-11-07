@@ -1,8 +1,7 @@
 // ========================== JOB COORDINATION (station, [PAM-Controller] PB) ==========================
 // The controller listens to the ships' traffic messages and keeps the master record of each co-op
 // job: finished holes and which ship has which hole. A ship that needs a hole sets a want flag;
-// the controller assigns the next free hole in the mining order (skipping holes where the ships
-// would touch) and broadcasts the job state twice a second. Claims are kept while a ship is out of
+// the controller assigns the next free hole in the mining order and broadcasts the job state twice a second. Claims are kept while a ship is out of
 // range (e.g. unloading far away) and dropped after JOB_SHIP_TIMEOUT without a message.
 
 const float JOB_SHIP_TIMEOUT = 600f; //[s]
@@ -126,7 +125,7 @@ JobShip HoleOwner(JobRec job, int cell, JobShip except)
     for (int i = 0; i < job.ships.Count; i++)
     {
         JobShip o = job.ships[i];
-        if (o != except && o.cell >= 0 && HolesTouch(cell, o.cell, job.w, job.tw, job.th, Math.Max(o.fw, except.fw), Math.Max(o.fh, except.fh)))
+        if (o != except && o.cell == cell)
             return o;
     }
     return null;

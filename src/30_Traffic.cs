@@ -224,10 +224,10 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         Vector3 pos = other.pos + other.vel * (float)(DateTime.Now - other.time).TotalSeconds;
         Vector3 rel = pos - shipPosition;
         float clear = (shipDiameter + other.diameter) * 0.5f;
-        // two ships working the same job are both aligned to it, side by side: their real size across
-        // the drill face counts, not the bounding sphere (that made ships at nearby holes block each other)
-        bool sideBySide = other.inJob && InJobArea() && other.fw > 0 && shipFootWidth > 0 && other.job == JobKey();
-        if (sideBySide) clear = Math.Max(shipFootWidth + other.fw, shipFootHeight + other.fh) * 0.5f;
+        // two ships working the same job are aligned to it and drill different holes, so a ship at
+        // another hole, even the next one, is never in the way: only closer than one hole spacing counts
+        bool sideBySide = other.inJob && InJobArea() && other.job == JobKey();
+        if (sideBySide) clear = Math.Min(toolWidth, toolHeight) * 0.9f;
         float along = haveDir ? Vector3.Dot(rel, dir) : 0;
         if (along > 0 && (rel - dir * along).Length() <= clear * 1.2f)
         {
@@ -293,8 +293,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
 // ---- co-op mining ----
 // Ships on the same job claim single holes, in the normal mining order. A claim is kept while the
 // job runs (also while the ship is away unloading), so a half-mined hole is never taken over.
-// A neighbouring hole is skipped only when the ship is wider than the area it drills (the two
-// ships would touch). Finished holes are shared.
+// The next ship takes the next hole, right beside the other one. Finished holes are shared.
 
 List<int> holeCells = new List<int>(); // mining order: grid cell (row * jobWidth + col) for each hole index
 String holeOrderKey = "";
@@ -331,12 +330,6 @@ void BuildHoleOrder(int w, int h, StartPosition start, List<int> cells)
     }
 }
 
-// Two holes so close that ships drilling them would touch (or the same hole).
-bool HolesTouch(int a, int b, int w, float tw, float th, float fw, float fh)
-{
-    return a == b || (Math.Abs(a % w - b % w) * tw < fw + 0.5f && Math.Abs(a / w - b / w) * th < fh + 0.5f);
-}
-
 bool EnsureDoneHoles()
 {
     int n = Math.Max(0, jobWidth * jobHeight);
@@ -365,8 +358,8 @@ void SetHoleDone(int cell, bool done)
     doneHoles = new String(h);
 }
 
-// Another ship on this job has this hole, or one so close that the ships would touch. keeping:
-// the hole is already ours, so only a ship with a lower id makes us give it up (both claimed at once).
+// Another ship on this job has this hole. keeping: the hole is already ours, so only a ship with a
+// lower id makes us give it up (both claimed it at once).
 bool HoleConflict(int cell, bool keeping)
 {
     if (!trafficEnabled) return false;
@@ -375,7 +368,7 @@ bool HoleConflict(int cell, bool keeping)
     {
         TrafficShip t = traffic[i];
         if (t.job != key || t.hole < 0 || (keeping && t.id > myGridId)) continue;
-        if (HolesTouch(cell, t.hole, jobWidth, toolWidth, toolHeight, shipFootWidth, shipFootHeight)) return true;
+        if (t.hole == cell) return true;
     }
     return false;
 }
