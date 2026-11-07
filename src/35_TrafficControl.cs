@@ -18,7 +18,7 @@ class TCShip
     public float dia, fw, fh, limit = -1;
     public int jobFlag; // 1 in the job area, 2 deep in its hole
     public int prio;    // right of way: 2 leaving the job site, 1 moving between holes / arriving
-    public float metric = -1; // distance to its next checkpoint
+    public float metric = -1; // distance it still has to go (whole metres)
     public String job = "";
     public int phase;
     public DateTime time;
@@ -131,8 +131,8 @@ long TCYielder(TCShip a, TCShip b, Vector3 ua, Vector3 ub, Vector3 rel, float di
     float ta = Vector3.Dot(ua, n), tb = Vector3.Dot(ub, -n); // speed towards the other ship
     if (ta - tb > 1) return a.id;
     if (tb - ta > 1) return b.id;
-    // the one closer to its next checkpoint goes first
-    if (a.metric >= 0 && b.metric >= 0 && Math.Abs(a.metric - b.metric) > 2) return a.metric > b.metric ? a.id : b.id;
+    // the one closer to where it is going goes first (same order as the ships use)
+    if (a.metric >= 0 && b.metric >= 0 && a.metric != b.metric) return a.metric > b.metric ? a.id : b.id;
     return a.id > b.id ? a.id : b.id;
 }
 

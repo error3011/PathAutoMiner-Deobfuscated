@@ -339,7 +339,7 @@ bool ΒΖ=ц<ј;if(!ΒΖ&&(t<=0||t>ΕЈ||(ā+ΑЃ*t).Length()>=ј)) continue;if(
 continue;Ţ p=null;for(int k=0;k<З.Count;k++)
 if((З[k].a==a.Κ&&З[k].b==b.Κ)||(З[k].a==b.Κ&&З[k].b==a.Κ)) p=З[k];if(p==null){p=new Ţ();p.a=a.Κ;p.b=b.Κ;p.ΒΤ=ΕЊ(a,b,Č,č,ā,ц);З.Add(p);}p.Ȫ=DateTime.Now;ύ y=p.ΒΤ==a.Κ?a:b;float Γύ=ΒΖ||t<4?0:Math.Max(1,y.ё.Length()*0.5f);if(y.о<0||Γύ<y.о) y.о=Γύ;
 }ΕΗ();}long ΕЊ(ύ a,ύ b,Vector3 Č,Vector3 č,Vector3 ā,float ц){if(a.Κ==ώ||Ж.Contains(a.Κ)) return b.Κ;if(b.Κ==ώ||Ж.Contains(b.Κ)) return a.Κ;if(a.Ǩ!=b.Ǩ) return a.Ǩ<b.Ǩ?a.Κ:b.Κ;Vector3 n=ц>0.01f?ā/ц:new Vector3(1,0,0);float ΔΚ=Vector3.Dot(Č,n),ΔΝ=Vector3.Dot(č,-n);
-if(ΔΚ-ΔΝ>1) return a.Κ;if(ΔΝ-ΔΚ>1) return b.Κ;if(a.ȅ>=0&&b.ȅ>=0&&Math.Abs(a.ȅ-b.ȅ)>2) return a.ȅ>b.ȅ?a.Κ:b.Κ;return a.Κ>b.Κ?a.Κ:b.Κ;}String Δα(){String ε="C;";bool Н=true;for(int i=0;i<Τ.Count;i++){if(Τ[i].о<0) continue;ε+=(Н?"":",")+Τ[i].Κ+":"+Math.Round(Τ[i].о,1);
+if(ΔΚ-ΔΝ>1) return a.Κ;if(ΔΝ-ΔΚ>1) return b.Κ;if(a.ȅ>=0&&b.ȅ>=0&&a.ȅ!=b.ȅ) return a.ȅ>b.ȅ?a.Κ:b.Κ;return a.Κ>b.Κ?a.Κ:b.Κ;}String Δα(){String ε="C;";bool Н=true;for(int i=0;i<Τ.Count;i++){if(Τ[i].о<0) continue;ε+=(Н?"":",")+Τ[i].Κ+":"+Math.Round(Τ[i].о,1);
 Н=false;}return ε;}String ΔБ(){int ΓІ=0,Αδ=0;for(int i=0;i<Τ.Count;i++){if(!Ę(Τ[i])) ΓІ++;if(Τ[i].о>=0) Αδ++;}if(Τ.Count==0) return "";return "Traffic: "+ΓІ+" moving"+(Αδ>0?", "+Αδ+" giving way":"")+"\n";}List<ί>Э=new List<ί>();ί ш=null;Vector3 Γτ;DateTime Γσ;
 float Γς=40;bool Γπ=false;ύ Ư(ί s){ύ А=null;for(int i=0;i<Τ.Count;i++) if(Τ[i].Ȉ!=0&&""+Τ[i].Ȉ==s.Κ) return Τ[i];for(int i=0;i<Τ.Count;i++)
 if(Vector3.Distance(Τ[i].Χ,s.Π)<15&&(А==null||

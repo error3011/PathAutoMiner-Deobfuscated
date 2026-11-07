@@ -24,7 +24,7 @@ class TrafficShip
     public bool parked;    // out of service (can't dock), parked beside the path: pass it
     public int jobFlag;    // 1: working in the job area, aligned to it; 2: deep in its hole (inside the rock)
     public int prio;       // right of way at the job site (TrafficPrio)
-    public float metric = -1; // distance to its next checkpoint (-1 unknown)
+    public float metric = -1; // distance it still has to go, whole metres (-1 unknown)
     public float fw, fh;   // its size across the drill face
     public long dock = 0;  // dock pool: connector this ship uses or heads for
     public int dockPhase = 0;
@@ -100,7 +100,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : outOfService ? 2 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + "," + Math.Round(Vector3.Distance(shipPosition, navTargetPos)) + ";" + Me.GetId());
+        ";" + (dockQueued ? 1 : outOfService ? 2 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + "," + Math.Round(DestDist()) + ";" + Me.GetId());
 }
 
 void ParseTraffic(String data)
@@ -185,20 +185,47 @@ float JobRadius() { return 0.5f * (float)Math.Sqrt(Math.Pow(jobWidth * JTW(), 2)
 
 bool NearJobArea() { return JobKey() != "" && Vector3.Distance(shipPosition, jobPosition.position) < JobRadius() + shipDiameter * 2; }
 
-// right of way at the job site: 2 leaving (heading home), 1 moving between holes or arriving, 0 other
+// right of way: 2 heading home (anywhere: backing out to go home, flying to the path, on the path
+// home), 1 moving between holes or arriving at the job area, 0 other (e.g. on the way to the job)
+bool HeadingHome() { NavState s = currentNavState; return s == NavState.ReturnToDock || s == NavState.FlyToPath || s == NavState.FlyToDockArea; }
+
 int TrafficPrio()
 {
     NavState s = currentNavState;
-    if (s == NavState.ReturnToDock || s == NavState.FlyToPath || (s == NavState.FlyToDockArea && NearJobArea())) return 2;
+    if (HeadingHome()) return 2;
     return s == NavState.FlyToXY || s == NavState.Returning || s == NavState.FlyToDropPos || (s == NavState.FlyToJobArea && NearJobArea()) ? 1 : 0;
 }
 
-// between ships with the same right of way: the one closer to its next checkpoint goes first (the
-// next path waypoint, or the path waypoint it flies to when it isn't on the path yet); equal: lower id
+// How far this ship still has to go, along the road: to the path waypoint it is on (or joins:
+// the nearest one, when it is beside the path or still at the job site), then along the path to
+// its end, home or job. So a ship already on the road goes before one that still has to join it.
+float DestDist()
+{
+    bool home = HeadingHome() && homeDock.isSet;
+    bool onPath = currentNavState == NavState.FlyToDockArea || currentNavState == NavState.FlyToJobArea;
+    if (waypoints.Count == 0 || (!home && !onPath)) return Vector3.Distance(shipPosition, navTargetPos);
+    int k = pathWaypointIndex, dir = pathDirection;
+    if (!onPath || dir == 0 || k < 0 || k >= waypoints.Count)
+    {
+        // joining the road: nearest waypoint, towards the home end of the path
+        k = 0;
+        for (int i = 1; i < waypoints.Count; i++)
+            if (Vector3.Distance(waypoints[i].position, shipPosition) < Vector3.Distance(waypoints[k].position, shipPosition)) k = i;
+        dir = Vector3.Distance(waypoints[0].position, homeDock.position) < Vector3.Distance(waypoints[waypoints.Count - 1].position, homeDock.position) ? -1 : 1;
+    }
+    float d = Vector3.Distance(shipPosition, waypoints[k].position);
+    for (int i = k; i + dir >= 0 && i + dir < waypoints.Count; i += dir) { d += Vector3.Distance(waypoints[i].position, waypoints[i + dir].position); k = i + dir; }
+    return home ? d + Vector3.Distance(waypoints[k].position, homeDock.position) : d;
+}
+
+// between ships with the same right of way: the one closer to where it is going goes first (whole
+// metres; equal: lower id). One number per ship, so the order is the same for every ship: no circle
+// of ships all giving way to each other.
 bool GoesFirst(float myDist, TrafficShip o)
 {
-    if (o.metric < 0 || Math.Abs(myDist - o.metric) <= 2) return myGridId < o.id;
-    return myDist < o.metric;
+    float mine = (float)Math.Round(myDist);
+    if (o.metric < 0 || mine == o.metric) return myGridId < o.id;
+    return mine < o.metric;
 }
 
 // 0: not working the job; 1: in the job area, aligned to it; 2: deeper in its hole than half its size
@@ -265,6 +292,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
     bool cpaHold = false; // held for a collision course: stop, don't move aside
     bool goingHome = currentNavState == NavState.FlyToDockArea && !StationCleared(1); // lines up in the dock queue
     int myPrio = TrafficPrio();
+    float myDest = DestDist();
 
     for (int i = 0; i < traffic.Count; i++)
     {
@@ -306,7 +334,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
                     if (along < (shipSpeed - otherAlong) * 6f + clear * 4f) trafficShift = right * clear * 1.3f;
                     continue;
                 }
-                if (hasHeading && GoesFirst(targetDist, other))
+                if (hasHeading && GoesFirst(myDest, other))
                 {
                     // does the other ship have me ahead in its corridor too (crossing paths)? then one
                     // of us has to go: the lower id goes, keeping right, the other one waits
@@ -332,7 +360,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         if (rv2 < 0.25f) continue;
         float t = -Vector3.Dot(rel, rv) / rv2;
         if (t <= 0 || t > 5f || (rel + rv * t).Length() >= (sideBySide ? clear : clear * 1.1f)) continue;
-        if (other.prio > myPrio || (other.prio == myPrio && !GoesFirst(targetDist, other)) || t < 2f) { trafficSpeedLimit = 0; limiter = other; cpaHold = true; }
+        if (other.prio > myPrio || (other.prio == myPrio && !GoesFirst(myDest, other)) || t < 2f) { trafficSpeedLimit = 0; limiter = other; cpaHold = true; }
     }
 
     // giving way: a ship with right of way that is coming through where I am (or wants to: its
@@ -343,7 +371,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         for (int i = 0; i < traffic.Count; i++)
         {
             TrafficShip o = traffic[i];
-            if (o.parked || o.jobFlag == 2 || !(o.prio > myPrio || (o.prio == myPrio && !GoesFirst(targetDist, o)))) continue;
+            if (o.parked || o.jobFlag == 2 || !(o.prio > myPrio || (o.prio == myPrio && !GoesFirst(myDest, o)))) continue;
             Vector3 oi = o.vel.LengthSquared() > 1 ? o.vel : o.heading;
             if (oi.LengthSquared() < 0.25f) continue;
             Vector3 od = Vector3.Normalize(oi);
