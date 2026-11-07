@@ -23,12 +23,13 @@ bool pathBlocked = false;
 int clearScans = 0, scanStep = 0, blindRuns = 0;
 const int SCAN_PATTERN = 16;
 int cameraIndex = 0;
-DateTime blockedSince = DateTime.Now;
+DateTime blockedSince = TimeNow();
 String blockedBy = "";
 String cameraCoverage = "";
 Vector3 detourShift = new Vector3(); // docking approach: way around an obstacle
 Vector3 laneEntry; bool toLane; // straight connector lane: entry point, flying to it
-int detourStep = 0; // ship directions some camera can scan (info page)
+int detourStep = 0;
+Vector3 gridHalf = new Vector3(); // half size of the ship's grid box (grid axes)
 
 void ScanCameras()
 {
@@ -72,7 +73,7 @@ void UpdateObstacleCheck()
     NavState ns = currentNavState;
     bool approach = ns == NavState.ApproachDock || ns == NavState.RetryDocking;
     // also backing out of a hole and undocking (blocks only: the hole walls / ground don't count)
-    bool backing = ns == NavState.Returning || ns == NavState.ReturnToDock || ns == NavState.FlyToDropPos || ns == NavState.Undocking;
+    bool backing = ns == NavState.Returning || ns == NavState.ReturnToDock || ns == NavState.FlyToDropPos || ns == NavState.Undocking || emgStage == 1; // emergency landing: the ground is the goal
     if (!approach) { detourShift = new Vector3(); detourStep = 0; }
     if (!obstacleBrake || cameras.Count == 0 || !(IsFreeFlightState(ns) || approach || backing)) { ClearBlocked(); return; }
     Vector3 flyTarget = navTargetPos + trafficShift + detourShift;
@@ -83,7 +84,11 @@ void UpdateObstacleCheck()
     // where the ship is really going in the next seconds: its velocity once it moves
     Vector3 vel = remoteControl != null ? (Vector3)remoteControl.GetShipVelocities().LinearVelocity : new Vector3();
     if (vel.Length() > 2) dir = Vector3.Normalize(vel);
-    Vector3 side = Vector3.Cross(dir, Math.Abs(dir.Y) < 0.9f ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0));
+    // real up (from gravity) for the ways over / under an obstacle; in space any perpendicular
+    Vector3 g = remoteControl != null ? -(Vector3)remoteControl.GetNaturalGravity() : new Vector3();
+    if (g.LengthSquared() < 0.01f) g = new Vector3(0, 1, 0);
+    Vector3 side = Vector3.Cross(dir, g);
+    if (side.LengthSquared() < 0.01f * g.LengthSquared()) side = Vector3.Cross(dir, leftDirection);
     side.Normalize();
     Vector3 up = Vector3.Cross(side, dir);
     // up to a little past the target (obstacles behind it don't matter), no further than the
@@ -93,7 +98,7 @@ void UpdateObstacleCheck()
     for (int k = 0; k < 2; k++)
     {
         int p = k == 0 ? 0 : scanStep++ % 8, e = p % 4; // k 0: centre, 1: next edge point (4-7: at half the distance)
-        Vector3 off = k == 0 ? new Vector3() : (e == 0 ? side : e == 1 ? -side : e == 2 ? up : -up) * shipDiameter * 0.5f;
+        Vector3 off = k == 0 ? new Vector3() : (e == 0 ? side : e == 1 ? -side : e == 2 ? up : -up) * HalfSize(e < 2 ? side : up);
         Vector3 end = shipPosition + dir * (p >= 4 ? dist * 0.5f : dist) + off;
         IMyCameraBlock cam = CameraFor(end);
         if (cam == null) { CountClear(); continue; } // no camera faces that point (or all charging)
@@ -105,12 +110,15 @@ void UpdateObstacleCheck()
         // PAM ships are left to the traffic logic, unless one is right in front (centre ray, closer
         // than one ship size): then brake anyway, whatever the traffic rules say
         bool closePam = k == 0 && hit.HitPosition.HasValue && Vector3D.Distance(hit.HitPosition.Value, shipPosition) < shipDiameter;
-        bool obstacle = !hit.IsEmpty() && !ownGridIds.Contains(hit.EntityId) && (!IsTrafficShip(hit.EntityId) || closePam) &&
+        // a PAM ship parked at a connector is left out by the traffic logic: an obstacle here (not when
+        // backing out of / flying straight into the own connector, right beside the ships docked next to it)
+        bool obstacle = !hit.IsEmpty() && !ownGridIds.Contains(hit.EntityId) &&
+            (!IsTrafficShip(hit.EntityId) || closePam || DockedPam(hit.EntityId) && !backing && !(approach && !toLane)) &&
             hit.Type != MyDetectedEntityType.FloatingObject && !(approach && atTarget) &&
             !(voxel && (k > 0 || backing || ns == NavState.FlyToXY || atTarget));
         if (obstacle)
         {
-            if (!pathBlocked) blockedSince = DateTime.Now;
+            if (!pathBlocked) blockedSince = TimeNow();
             pathBlocked = true;
             clearScans = 0;
             blockedBy = hit.Type.ToString();
@@ -122,7 +130,7 @@ void UpdateObstacleCheck()
     blindRuns = cast > 0 || backing ? 0 : blindRuns + 1; // backing out: usually no camera that way, fine
     if (blindRuns > 12) statusMessage = "Cameras can't see ahead";
 
-    double blockedFor = (DateTime.Now - blockedSince).TotalSeconds;
+    double blockedFor = (TimeNow() - blockedSince).TotalSeconds;
     if (approach && pathBlocked && blockedFor > 4)
     {
         if (detourStep < 4)
@@ -130,7 +138,7 @@ void UpdateObstacleCheck()
             // try the next way around: up, right, left, down from the straight line to the connector
             detourStep++;
             detourShift = (detourStep == 1 ? up : detourStep == 2 ? side : detourStep == 3 ? -side : -up) * shipDiameter;
-            blockedSince = DateTime.Now;
+            blockedSince = TimeNow();
             ClearBlocked();
             statusMessage = "Docking: going around an obstacle";
         }
@@ -139,6 +147,15 @@ void UpdateObstacleCheck()
     }
     if (pathBlocked && blockedFor > obstacleTimeout)
         statusMessage = "Path blocked: " + blockedBy;
+}
+
+// half the ship's size along u (its grid box): the edge rays at its real edges, not the bounding
+// sphere's (much wider than a long ship: false blocks in tight places)
+float HalfSize(Vector3 u)
+{
+    if (gridHalf.X <= 0) return shipDiameter * 0.5f;
+    MatrixD m = remoteControl.CubeGrid.WorldMatrix;
+    return Math.Abs(Vector3.Dot(u, m.Right)) * gridHalf.X + Math.Abs(Vector3.Dot(u, m.Up)) * gridHalf.Y + Math.Abs(Vector3.Dot(u, m.Backward)) * gridHalf.Z;
 }
 
 void CountClear() { if (pathBlocked && ++clearScans >= SCAN_PATTERN) ClearBlocked(); }

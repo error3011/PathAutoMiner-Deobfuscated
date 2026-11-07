@@ -73,7 +73,7 @@ void HandleDebugMessage(String data)
     s.jobPos = StringToVector(f[1]); s.left = StringToVector(f[2]); s.down = StringToVector(f[3]);
     s.hasJob = s.left.LengthSquared() > 0.5f;
     s.target = StringToVector(f[4]);
-    s.time = DateTime.Now;
+    s.time = TimeNow();
     if (f[5] == "") return; // keep the last rays until new ones come
     s.rayFrom.Clear(); s.rayTo.Clear(); s.rayHit.Clear();
     String[] rays = f[5].Split(':');
@@ -97,7 +97,7 @@ void UpdateDebugDraw()
         String data = dbgListener.AcceptMessage().Data as String;
         if (data != null) try { HandleDebugMessage(data); } catch { }
     }
-    for (int i = dbgShips.Count - 1; i >= 0; i--) if ((DateTime.Now - dbgShips[i].time).TotalSeconds > 5) dbgShips.RemoveAt(i);
+    for (int i = dbgShips.Count - 1; i >= 0; i--) if ((TimeNow() - dbgShips[i].time).TotalSeconds > 5) dbgShips.RemoveAt(i);
 
     dbg.RemoveDraw();
     // ships
@@ -113,7 +113,7 @@ void UpdateDebugDraw()
     // ships on a collision course
     for (int i = 0; i < tcPairs.Count; i++)
     {
-        if ((DateTime.Now - tcPairs[i].last).TotalSeconds > 0.5) continue;
+        if ((TimeNow() - tcPairs[i].last).TotalSeconds > 0.5) continue;
         TCShip a = null, b = null;
         for (int k = 0; k < tcShips.Count; k++)
         {

@@ -6,7 +6,7 @@
 
 IMyBroadcastListener stationListener = null;
 int dockRequestKind = 0;        // 0 none, 1 dock, 2 undock
-DateTime dockRequestSince = DateTime.Now;
+DateTime dockRequestSince = TimeNow();
 DateTime stationAckTime = DateTime.MinValue;
 long stationCleared = 0;
 int stationClearedKind = 0;
@@ -19,17 +19,21 @@ bool dockQueued = false;  // holding outside the docking area for clearance (sen
 bool outOfService = false; // can't dock (connector damaged): parked beside the path, others pass it
 bool dockHoldSet = false;
 Vector3 dockHoldPos = new Vector3();
+bool emergency = false; // heading home low on energy: lands while it has to wait to dock, docks first
+int emgStage = 0;       // 1 coming down, 2 landed (thrusters off), 3 taking off again
+int emgTicks = 0, emgStill = 0, emgFree = 0;
+Vector3 emgStart = new Vector3();
 
-bool StationHandlesMe() { return dockRequestKind != 0 && (DateTime.Now - stationAckTime).TotalSeconds < 3; }
+bool StationHandlesMe() { return dockRequestKind != 0 && (TimeNow() - stationAckTime).TotalSeconds < 3; }
 bool StationCleared(int kind) { return StationHandlesMe() && stationCleared == myGridId && stationClearedKind == kind; }
 // still waiting for a first answer, or the station is handling this ship
-bool StationDeciding() { return StationHandlesMe() || (DateTime.Now - dockRequestSince).TotalSeconds < 3; }
+bool StationDeciding() { return StationHandlesMe() || (TimeNow() - dockRequestSince).TotalSeconds < 3; }
 
 void RequestDock(int kind)
 {
     if (dockRequestKind == kind) return;
     dockRequestKind = kind;
-    dockRequestSince = DateTime.Now;
+    dockRequestSince = TimeNow();
     dockRequestTick = 3; // send right away
 }
 
@@ -53,6 +57,12 @@ void UpdateDockClearance()
     }
 
     if (currentNavState != NavState.FlyToDockArea) { dockQueued = false; dockHoldSet = false; }
+    // emergency: heading home low on energy, until it docks
+    int ph = DockPhase();
+    if (HeadingHome() && LowEnergy()) emergency = true;
+    if (!HeadingHome() && ph != 1 && ph != 2) emergency = false;
+    // stopped or sent elsewhere while landed: power up again
+    if (emgStage > 0 && currentNavState != NavState.FlyToDockArea) { emgStage = 0; SetBlocksEnabled(thrusters, true); SetLandingGears(landingGears, false); }
 
     // finished?
     if (dockRequestKind == 1 && FindConnector(MyShipConnectorStatus.Connected) != null) ReleaseDock();
@@ -62,7 +72,8 @@ void UpdateDockClearance()
     if (dockRequestKind != 0 && ++dockRequestTick >= 3)
     {
         dockRequestTick = 0;
-        IGC.SendBroadcastMessage(DOCK_TAG, "R;" + myGridId + ";" + dockRequestKind + ";" + homeConnId + ";" + (dockRelSet ? 1 : 0) + ";" + UsablePool());
+        IGC.SendBroadcastMessage(DOCK_TAG, "R;" + myGridId + ";" + dockRequestKind + ";" + homeConnId + ";" + (dockRelSet ? 1 : 0) + ";" + UsablePool() +
+            ";" + String.Join(",", badDocks) + ";" + (emergency ? 1 : 0));
     }
 }
 
@@ -74,7 +85,7 @@ void ParseStation(String data)
     String[] acks = f[5].Split(',');
     for (int i = 0; i < acks.Length; i++) if (acks[i] == myGridId.ToString()) forMe = true;
     if (!forMe) return;
-    stationAckTime = DateTime.Now;
+    stationAckTime = TimeNow();
     // cleared ships: ship:kind:connector,... (several may be on their way to different connectors)
     stationCleared = 0; stationClearedKind = 0; stationConn = 0;
     String[] cl = f[2].Split(',');
@@ -149,8 +160,8 @@ bool HoldForDockArea(Vector3 cur, Vector3 next)
     if (!trafficEnabled || shipMode == ShipMode.Shuttle || homeConnId == 0) return false;
     // no working connector: can't dock. Don't queue or enter the docking area: stop near home, beside
     // the path (the others pass it), and say so
-    bool broken = connectors.Count > 0;
-    for (int i = 0; i < connectors.Count; i++) if (IsBlockValid(connectors[i], true) && connectors[i].IsFunctional) broken = false;
+    bool broken = true; // also when it's gone altogether (no connector left on the ship)
+    for (int i = 0; i < connectors.Count; i++) if (!connectors[i].Closed && connectors[i].IsFunctional) broken = false;
     if (broken && Vector3.Distance(shipPosition, homeDock.position) < dockRequestDistance)
     {
         if (dockRequestKind != 0) ReleaseDock();
@@ -165,6 +176,36 @@ bool HoldForDockArea(Vector3 cur, Vector3 next)
     if (!InDockZone(cur) && !InDockZone(next) && !InDockZone(shipPosition)) return false;
     dockQueued = true;
     return true;
+}
+
+bool LowEnergy() { String m = statusMessage; bool low = !CheckEnergy(); statusMessage = m; return low; }
+
+// Emergency (low on energy) while it has to wait to dock: come down slowly straight below, land and
+// switch the thrusters off (no energy spent hovering) until the station clears it (an emergency
+// goes first) or a dock is free. In space: stop, then thrusters off.
+void EmergencyLand()
+{
+    emgFree = 0;
+    if (emgStage == 0) { emgStage = 1; emgStart = shipPosition; emgTicks = 0; emgStill = 0; }
+    if (emgStage == 1)
+    {
+        Vector3 g = remoteControl.GetNaturalGravity();
+        bool space = g.LengthSquared() < 0.01f;
+        SetFlightTarget(space ? emgStart : shipPosition + Vector3.Normalize(g) * 50, space ? 0 : 3);
+        statusMessage = "Emergency: landing";
+        // on the ground: stopped for 2 s (not by traffic or the cameras), or a landing gear touches
+        emgTicks++;
+        emgStill = shipSpeed < 0.3f && trafficSpeedLimit < 0 && !pathBlocked ? emgStill + 1 : 0;
+        bool gear = false;
+        for (int i = 0; i < landingGears.Count; i++) if (landingGears[i].LockMode != LandingGearMode.Unlocked) gear = true;
+        if ((emgTicks < 18 || emgStill < 12) && !gear) return;
+        emgStage = 2;
+        SetLandingGears(landingGears, true);
+        SetBlocksEnabled(thrusters, false);
+    }
+    StopFlight();
+    StopGyroOverride();
+    statusMessage = "Emergency: landed, waiting to dock";
 }
 
 // Called before undocking. Returns true when the ship may undock now.

@@ -2,6 +2,10 @@
 
 static float SafeDiv(float a, float b) { if (b == 0) return 0; return a / b; }
 
+// all timers use UTC: local time jumps an hour at the daylight saving change (timeouts would stop
+// expiring for that hour)
+static DateTime TimeNow() { return DateTime.UtcNow; }
+
 Vector3 RoundVector(Vector3 v, int decimals)
 {
     return new Vector3(Math.Round(v.X, decimals), Math.Round(v.Y, decimals), Math.Round(v.Z, decimals));

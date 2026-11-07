@@ -28,26 +28,11 @@ void MenuDown(bool loop)
 
 String ShowStatusMessage(StatusMsg msg)
 {
-    switch (msg)
-    {
-        case StatusMsg.Running: statusMessage = "Job is running"; break;
-        case StatusMsg.ConnectorNotReady: statusMessage = "Connector not ready!"; break;
-        case StatusMsg.ShipModified: statusMessage = "Ship modified, path outdated!"; break;
-        case StatusMsg.Interrupted: statusMessage = "Interrupted by player!"; break;
-        case StatusMsg.Shuttle: statusMessage = "Shuttle mode enabled!"; break;
-    }
+    statusMessage = Pick("Job is running|Connector not ready!|Ship modified, path outdated!|Interrupted by player!|Shuttle mode enabled!", (int)msg);
     return "";
 }
 
-String GetStartPosName(StartPosition pos)
-{
-    switch (pos)
-    {
-        case StartPosition.TopLeft: return "Top-Left";
-        case StartPosition.Center: return "Center";
-        default: return "";
-    }
-}
+String GetStartPosName(StartPosition pos) { return Pick("Top-Left|Center", (int)pos); }
 
 String GetDepthModeName(DepthMode mode)
 {
@@ -60,109 +45,32 @@ String GetDepthModeName(DepthMode mode)
     }
 }
 
-String GetJobStateName(JobState state)
-{
-    switch (state)
-    {
-        case JobState.NoJob: return "No job";
-        case JobState.Paused: return "Job paused";
-        case JobState.Active: return "Job active";
-        case JobState.ActiveHome: return "Job active";
-        case JobState.ActiveJob: return "Job active";
-        case JobState.Done: return "Job done";
-        case JobState.Changed: return "Job changed";
-        case JobState.MoveHome: return "Move home";
-        case JobState.MoveToJob: return "Move to job";
-    }
-    return "";
-}
+String GetJobStateName(JobState state) { return Pick("No job|Job paused|Job active|Job done|Job changed|Move home|Move to job|Job active|Job active", (int)state); }
 
-String GetDamageBehaviorName(DamageBehavior behavior)
-{
-    switch (behavior)
-    {
-        case DamageBehavior.ReturnHome: return "Return home";
-        case DamageBehavior.FlyToJob: return "Fly to job pos";
-        case DamageBehavior.Stop: return "Stop";
-        case DamageBehavior.Ignore: return "Ignore";
-    }
-    return "";
-}
+String GetDamageBehaviorName(DamageBehavior behavior) { return Pick("Return home|Fly to job pos|Stop|Ignore", (int)behavior); }
 
-String GetEjectionModeName(EjectionMode mode)
-{
-    switch (mode)
-    {
-        case EjectionMode.Off: return "Off";
-        case EjectionMode.DropPosStone: return "Drop pos (Stone) ";
-        case EjectionMode.DropPosStoIce: return "Drop pos (Sto.+Ice)";
-        case EjectionMode.CurPosStone: return "Cur. pos (Stone)";
-        case EjectionMode.CurPosStoIce: return "Cur. pos (Sto.+Ice)";
-        case EjectionMode.InMotionStone: return "In motion (Stone)";
-        case EjectionMode.InMotionStoIce: return "In motion (Sto.+Ice)";
-    }
-    return "";
-}
+String GetEjectionModeName(EjectionMode mode) { return Pick("Off|Cur. pos (Stone)|Cur. pos (Sto.+Ice)|Drop pos (Stone) |Drop pos (Sto.+Ice)|In motion (Stone)|In motion (Sto.+Ice)", (int)mode); }
 
-String GetBatteryStateName(BatteryState state)
-{
-    switch (state)
-    {
-        case BatteryState.None: return "No batteries";
-        case BatteryState.Charging: return "Charging";
-        case BatteryState.Discharging: return "Discharging";
-    }
-    return "";
-}
+String GetBatteryStateName(BatteryState state) { return Pick("No batteries|Charging||Discharging", (int)state); }
 
 String GetNavStateName(NavState state)
 {
-    String jobLabel = shipMode == ShipMode.Shuttle ? "target" : "job";
-    switch (state)
-    {
-        case NavState.Idle: return "Idle";
-        case NavState.FlyToXY: return "Flying to XY position";
-        case NavState.Mining: return shipMode == ShipMode.Grinder ? "Grinding" : "Mining";
-        case NavState.Returning: return "Returning";
-        case NavState.FlyToDropPos: return "Flying to drop pos";
-        case NavState.ReturnToDock: return "Returning to dock";
-        case NavState.FlyToDockArea: return "Flying to dock area";
-        case NavState.FlyToJobArea: return "Flying to job area";
-        case NavState.FlyToPath: return "Flying to path";
-        case NavState.FlyToJobPos: return "Flying to job position";
-        case NavState.ApproachDock: return "Approaching dock";
-        case NavState.Docking: return "Docking";
-        case NavState.AlignDock: return "Aligning";
-        case NavState.AlignJob: return "Aligning";
-        case NavState.RetryDocking: return "Retry docking";
-        case NavState.Unloading: return "Unloading";
-        case NavState.WaitForCommand: return waitingStatusText;
-        case NavState.Undocking: return "Undocking";
-        case NavState.Charging: return "Charging batteries";
-        case NavState.WaitUranium: return "Waiting for uranium";
-        case NavState.FillHydrogen: return "Filling up hydrogen";
-        case NavState.WaitEjection: return "Waiting for ejection";
-        case NavState.WaitEjectionDrop: return "Waiting for ejection";
-        case NavState.FlyToDropPos2: return "Flying to drop pos";
-    }
-    return "";
+    if (state == NavState.Mining && shipMode == ShipMode.Grinder) return "Grinding";
+    if (state == NavState.WaitForCommand) return waitingStatusText;
+    return Pick("Idle|Flying to XY position|Mining|Returning|Returning to dock|Flying to dock area|Flying to job area|Flying to path|" +
+        "Flying to job position|Approaching dock|Docking|Aligning|Aligning|Retry docking|Unloading|Undocking|Charging batteries|" +
+        "Waiting for uranium|Filling up hydrogen|Waiting for ejection|Waiting for ejection|Flying to drop pos|Flying to drop pos", (int)state);
 }
 
 String GetUndockTriggerName(UndockTrigger trigger)
 {
-    switch (trigger)
-    {
-        case UndockTrigger.OnCommand: return "On \"Undock\" command";
-        case UndockTrigger.OnPlayerEntered: return "On player entered cockpit";
-        case UndockTrigger.OnShipFull: return "On ship is full";
-        case UndockTrigger.OnShipEmpty: return "On ship is empty";
-        case UndockTrigger.OnTimerDelay: return "On time delay";
-        case UndockTrigger.OnBatteriesLow25: return "On batteries empty(<25%)";
-        case UndockTrigger.OnBatteriesEmpty: return "On batteries empty(=0%)";
-        case UndockTrigger.OnBatteriesFull: return "On batteries full";
-        case UndockTrigger.OnHydrogenLow25: return "On hydrogen empty(<25%)";
-        case UndockTrigger.OnHydrogenEmpty: return "On hydrogen empty(=0%)";
-        case UndockTrigger.OnHydrogenFull: return "On hydrogen full";
-    }
-    return "";
+    return Pick("On \"Undock\" command|On player entered cockpit|On time delay|On ship is full|On ship is empty|On batteries full|" +
+        "On batteries empty(<25%)|On batteries empty(=0%)|On hydrogen full|On hydrogen empty(<25%)|On hydrogen empty(=0%)", (int)trigger);
+}
+
+// names in enum order, '|' separated (shorter than a switch)
+String Pick(String list, int i)
+{
+    String[] a = list.Split('|');
+    return i >= 0 && i < a.Length ? a[i] : "";
 }

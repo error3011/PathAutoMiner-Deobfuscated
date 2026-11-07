@@ -27,7 +27,7 @@ void Main(string argument, UpdateType updateSource)
         {
             animCounter++;
             if (animCounter > 4) animCounter = 0;
-            scanCountdown = (int)Math.Max(0, 10 - (DateTime.Now - lastScanTime).TotalSeconds);
+            scanCountdown = (int)Math.Max(0, 10 - (TimeNow() - lastScanTime).TotalSeconds);
         }
 
         if (argument != "") lastArgument = argument;

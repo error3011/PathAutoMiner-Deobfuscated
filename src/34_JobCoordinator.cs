@@ -44,7 +44,7 @@ void UpdateJobCoordination()
     {
         JobRec job = jobs[j];
         for (int i = job.ships.Count - 1; i >= 0; i--)
-            if ((DateTime.Now - job.ships[i].seen).TotalSeconds > JOB_SHIP_TIMEOUT) job.ships.RemoveAt(i);
+            if ((TimeNow() - job.ships[i].seen).TotalSeconds > JOB_SHIP_TIMEOUT) job.ships.RemoveAt(i);
         if (job.ships.Count == 0) { jobs.RemoveAt(j); continue; }
         AssignJobHoles(job);
     }
@@ -70,7 +70,7 @@ String BuildJobMessage(JobRec job)
     bool first = true;
     for (int i = 0; i < job.ships.Count; i++)
     {
-        if ((DateTime.Now - job.ships[i].seen).TotalSeconds > 5) continue;
+        if ((TimeNow() - job.ships[i].seen).TotalSeconds > 5) continue;
         msg += (first ? "" : ",") + job.ships[i].id + ":" + job.ships[i].cell;
         first = false;
     }
@@ -111,7 +111,7 @@ void HandleJobTraffic(String data)
     JobShip s = null;
     for (int i = 0; i < job.ships.Count; i++) if (job.ships[i].id == id) s = job.ships[i];
     if (s == null) { s = new JobShip(); s.id = id; job.ships.Add(s); }
-    s.seen = DateTime.Now;
+    s.seen = TimeNow();
     String[] w = f[10].Split(',');
     s.want = w[0] == "1";
     if (w.Length >= 3) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); }

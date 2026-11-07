@@ -44,7 +44,7 @@ void ControllerMainLoop(string argument)
             firstRun = false;
             ScanControllerBlocks();
             InitBroadcast();
-            lastScanTime = DateTime.Now;
+            lastScanTime = TimeNow();
         }
     }
 
@@ -58,7 +58,7 @@ void ControllerMainLoop(string argument)
 
 void UpdateShipInfo(ShipInfo ship, String data)
 {
-    ship.lastMessageTime = DateTime.Now;
+    ship.lastMessageTime = TimeNow();
     String field = "";
     ExtractField(ref data, out ship.version, BROADCAST_SEP);
     ExtractField(ref data, out ship.name, BROADCAST_SEP);
@@ -123,7 +123,7 @@ const float CMD_RESULT_TIME = 20f; //[s]
 
 bool ShowCmdResult(ShipInfo target, String cmd)
 {
-    return cmd == cmdSent && target == cmdTarget && ((DateTime.Now - cmdTime).TotalSeconds < CMD_RESULT_TIME ||
+    return cmd == cmdSent && target == cmdTarget && ((TimeNow() - cmdTime).TotalSeconds < CMD_RESULT_TIME ||
         (cmd == "HOMEPOS" && (homeQueue.Count > 0 || homeCurrent != null))); // staged "Move home" still running
 }
 
@@ -147,7 +147,7 @@ String GetCmdResultLines(ShipInfo target)
 
 void SendCommandToShip(ShipInfo ship, String cmd)
 {
-    cmdSent = cmd; cmdTarget = ship; cmdTime = DateTime.Now;
+    cmdSent = cmd; cmdTarget = ship; cmdTime = TimeNow();
     cmdShips.Clear();
     if (ship == null) cmdShips.AddRange(connectedShips); else cmdShips.Add(ship);
     // a new command replaces a staged "Move home" (for that ship, or for all)
@@ -396,7 +396,7 @@ String GetItemShortName(ItemInfo item)
 // Replaces the text with "No signal..." once the ship hasn't reported for a while.
 String SignalOrText(ShipInfo ship, String text)
 {
-    if (ship.IsTimedOut()) return "No signal...(" + FormatTime((int)(DateTime.Now - ship.lastMessageTime).TotalSeconds) + ")";
+    if (ship.IsTimedOut()) return "No signal...(" + FormatTime((int)(TimeNow() - ship.lastMessageTime).TotalSeconds) + ")";
     return text;
 }
 

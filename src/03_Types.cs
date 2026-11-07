@@ -91,10 +91,10 @@ class UndockConfig
     public void UpdateTimer()
     {
         if (counting)
-            if ((DateTime.Now - lastTimerTick).TotalSeconds > 1)
+            if ((TimeNow() - lastTimerTick).TotalSeconds > 1)
             {
                 elapsedDelay++;
-                lastTimerTick = DateTime.Now;
+                lastTimerTick = TimeNow();
             }
     }
 
@@ -159,13 +159,13 @@ class ShipInfo
 
     public bool IsTimedOut()
     {
-        return (DateTime.Now - lastMessageTime).TotalSeconds > 10;
+        return (TimeNow() - lastMessageTime).TotalSeconds > 10;
     }
 
     public bool IsCommandTimedOut()
     {
         if (commandState != CommandState.Pending) return false;
-        return (DateTime.Now - commandSentTime).TotalSeconds >= 4;
+        return (TimeNow() - commandSentTime).TotalSeconds >= 4;
     }
 
     public ShipInfo(String id) { this.id = id; }
@@ -180,7 +180,7 @@ class ShipInfo
         {
             pendingCommand = cmd;
             commandState = CommandState.Pending;
-            commandSentTime = DateTime.Now;
+            commandSentTime = TimeNow();
             return commandState;
         }
         else if (clear)

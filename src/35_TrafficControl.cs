@@ -3,10 +3,10 @@
 // ships that are out of each other's radio range. Every tick it predicts each pair a few seconds
 // ahead (velocity, or the direction a stopped ship wants to go) and, when two would come closer
 // than their size, tells one of them to slow down or hold. Who gives way, the same rules the ships
-// use themselves: the ship cleared to dock goes; otherwise the ship closing in on the other gives
-// way (the one behind, or the one flying into the other's path); otherwise the higher id. Ships
-// meeting head-on pass each other on the right by themselves, as before. The
-// choice is kept while the conflict lasts, so it can't flip back and forth. Ships parked or
+// use themselves: the ship cleared to dock goes; then the higher right of way; going the same way,
+// the one catching up gives way; otherwise the one farther from where it is going; otherwise the
+// higher id. Ships meeting head-on pass each other on the right by themselves. The choice is kept
+// while the conflict lasts (unless a right of way changes), so it can't flip back and forth. Ships parked or
 // hovering without wanting to move are obstacles for the ships' own avoidance, not for this.
 
 const float TCC_HORIZON = 8f; //[s] how far ahead conflicts are predicted
@@ -27,6 +27,7 @@ class TCShip
 class TCPair
 {
     public long a, b, yielder;
+    public int sig; // both priorities when decided: decide again when one changes (e.g. a ship turns home)
     public DateTime last;
 }
 
@@ -56,7 +57,7 @@ void HandleTrafficControl(String data)
         if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); if (w.Length >= 5) s.prio = int.Parse(w[4]); s.metric = w.Length >= 6 ? float.Parse(w[5]) : -1; }
     }
     s.pb = f.Length >= 12 ? long.Parse(f[11]) : 0;
-    s.time = DateTime.Now;
+    s.time = TimeNow();
 }
 
 // not moving and not wanting to move (docked, parked, waiting in the dock queue, idle)
@@ -76,9 +77,9 @@ void UpdateTrafficControl()
 void ComputeTrafficControl()
 {
     for (int i = tcShips.Count - 1; i >= 0; i--)
-        if ((DateTime.Now - tcShips[i].time).TotalSeconds > 3) tcShips.RemoveAt(i);
+        if ((TimeNow() - tcShips[i].time).TotalSeconds > 3) tcShips.RemoveAt(i);
     for (int i = tcPairs.Count - 1; i >= 0; i--)
-        if ((DateTime.Now - tcPairs[i].last).TotalSeconds > 2) tcPairs.RemoveAt(i); // conflict over: forget who gave way
+        if ((TimeNow() - tcPairs[i].last).TotalSeconds > 2) tcPairs.RemoveAt(i); // conflict over: forget who gave way
     for (int i = 0; i < tcShips.Count; i++) tcShips[i].limit = -1;
 
     for (int i = 0; i < tcShips.Count; i++)
@@ -86,8 +87,8 @@ void ComputeTrafficControl()
         {
             TCShip a = tcShips[i], b = tcShips[j];
             if (TCParked(a) || TCParked(b)) continue;
-            Vector3 pa = a.pos + a.vel * (float)(DateTime.Now - a.time).TotalSeconds;
-            Vector3 pb = b.pos + b.vel * (float)(DateTime.Now - b.time).TotalSeconds;
+            Vector3 pa = a.pos + a.vel * (float)(TimeNow() - a.time).TotalSeconds;
+            Vector3 pb = b.pos + b.vel * (float)(TimeNow() - b.time).TotalSeconds;
             Vector3 ua = TCIntent(a), ub = TCIntent(b);
             Vector3 rel = pb - pa;
             float dist = rel.Length();
@@ -113,8 +114,10 @@ void ComputeTrafficControl()
             TCPair p = null;
             for (int k = 0; k < tcPairs.Count; k++)
                 if ((tcPairs[k].a == a.id && tcPairs[k].b == b.id) || (tcPairs[k].a == b.id && tcPairs[k].b == a.id)) p = tcPairs[k];
-            if (p == null) { p = new TCPair(); p.a = a.id; p.b = b.id; p.yielder = TCYielder(a, b, ua, ub, rel, dist); tcPairs.Add(p); }
-            p.last = DateTime.Now;
+            int sig = a.id < b.id ? a.prio * 8 + b.prio : b.prio * 8 + a.prio;
+            if (p == null) { p = new TCPair(); p.a = a.id; p.b = b.id; p.sig = sig + 1; tcPairs.Add(p); }
+            if (p.sig != sig) { p.sig = sig; p.yielder = TCYielder(a, b, ua, ub, rel, dist); }
+            p.last = TimeNow();
             TCShip y = p.yielder == a.id ? a : b;
             float lim = tooClose || t < 4 ? 0 : Math.Max(1, y.vel.Length() * 0.5f); // close: hold, later: slow down
             if (y.limit < 0 || lim < y.limit) y.limit = lim;
@@ -127,11 +130,15 @@ long TCYielder(TCShip a, TCShip b, Vector3 ua, Vector3 ub, Vector3 rel, float di
     if (a.id == clearedShip || dockingShips.Contains(a.id)) return b.id; // cleared to dock by this station
     if (b.id == clearedShip || dockingShips.Contains(b.id)) return a.id;
     if (a.prio != b.prio) return a.prio < b.prio ? a.id : b.id; // ships leaving the job site go first
-    Vector3 n = dist > 0.01f ? rel / dist : new Vector3(1, 0, 0);
-    float ta = Vector3.Dot(ua, n), tb = Vector3.Dot(ub, -n); // speed towards the other ship
-    if (ta - tb > 1) return a.id;
-    if (tb - ta > 1) return b.id;
-    // the one closer to where it is going goes first (same order as the ships use)
+    // going the same way: the one catching up with the other gives way (the ships do that too: they follow)
+    if (Vector3.Dot(ua, ub) > 0)
+    {
+        Vector3 n = dist > 0.01f ? rel / dist : new Vector3(1, 0, 0);
+        float ta = Vector3.Dot(ua, n), tb = Vector3.Dot(ub, -n); // speed towards the other ship
+        if (ta - tb > 1) return a.id;
+        if (tb - ta > 1) return b.id;
+    }
+    // otherwise the one closer to where it is going goes first (same order as the ships use)
     if (a.metric >= 0 && b.metric >= 0 && a.metric != b.metric) return a.metric > b.metric ? a.id : b.id;
     return a.id > b.id ? a.id : b.id;
 }
@@ -232,7 +239,7 @@ void UpdateStagedHome()
     if (homeCurrent != null)
     {
         bool gone = homeCurrentDocked || Vector3.Distance(homeCurrent.position, homeStartPos) > homeReleaseDist ||
-            (DateTime.Now - homeSentTime).TotalSeconds > 45 || homeCurrent.IsTimedOut();
+            (TimeNow() - homeSentTime).TotalSeconds > 45 || homeCurrent.IsTimedOut();
         if (!gone) return;
         homeCurrent = null;
     }
@@ -240,7 +247,7 @@ void UpdateStagedHome()
     homeCurrent = homeQueue[0];
     homeQueue.RemoveAt(0);
     homeStartPos = homeCurrent.position;
-    homeSentTime = DateTime.Now;
+    homeSentTime = TimeNow();
     TCShip t = FindTCShip(homeCurrent);
     homeReleaseDist = t == null ? 40 : Math.Max(40, t.dia * 3);
     homeCurrentDocked = t != null && t.phase == 3 && t.vel.LengthSquared() < 0.25f;

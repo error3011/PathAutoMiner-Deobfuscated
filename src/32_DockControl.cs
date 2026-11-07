@@ -17,6 +17,8 @@ class DockRequest
     public long home;
     public bool canUsePool;
     public String usable; // ",id,id," pool connectors the ship can dock at in its normal attitude (null: older build)
+    public String bad = ""; // ",id,id," connectors that didn't lock for this ship
+    public bool emg;      // low on energy: docks first
     public DateTime first, last;
 }
 
@@ -30,7 +32,7 @@ long clearedShip = 0;
 int clearedKind = 0;
 long clearedConn = 0;
 List<long> dockingShips = new List<long>(), dockingConns = new List<long>(); // cleared, on the last leg
-DateTime clearedSince = DateTime.Now;
+DateTime clearedSince = TimeNow();
 String dockAreaStatus = "";
 int dockSendTick = 0;
 IMyCubeGrid stationGrid = null;
@@ -95,14 +97,14 @@ bool IsZoneBusy()
 long PickDock(DockRequest r)
 {
     IMyShipConnector home = StationConnector(r.home);
-    if (IsDockFree(home) && !DockTaken(home.EntityId) && IsLaneClear(home, r.ship)) return home.EntityId;
+    if (IsDockFree(home) && !DockTaken(home.EntityId) && !r.bad.Contains("," + home.EntityId + ",") && IsLaneClear(home, r.ship)) return home.EntityId;
     if (!r.canUsePool || home == null) return 0; // home removed: the pool poses are relative to it
     IMyShipConnector best = null;
     double bestDist = 0;
     for (int i = 0; i < stationDocks.Count; i++)
     {
         IMyShipConnector c = stationDocks[i];
-        if (!IsDockFree(c) || DockTaken(c.EntityId) || (r.usable != null && !r.usable.Contains("," + c.EntityId + ","))) continue;
+        if (!IsDockFree(c) || DockTaken(c.EntityId) || (r.usable != null && !r.usable.Contains("," + c.EntityId + ",")) || r.bad.Contains("," + c.EntityId + ",")) continue;
         double d = Vector3D.Distance(c.GetPosition(), home.GetPosition());
         if (best == null || d < bestDist) { if (IsLaneClear(c, r.ship)) { best = c; bestDist = d; } }
     }
@@ -113,14 +115,15 @@ void GrantNext()
 {
     DockRequest pick = null;
     long conn = 0;
-    for (int pass = 2; pass >= 1 && pick == null; pass--)
+    // pass 3: emergency (low on energy) docking first, 2: undocking (frees a connector), 1: docking
+    for (int pass = 3; pass >= 1 && pick == null; pass--)
     {
         DockRequest oldest = null;
         for (int i = 0; i < dockRequests.Count; i++)
         {
             DockRequest r = dockRequests[i];
-            if (r.kind != pass || dockingShips.Contains(r.ship) || (pass == 2 && dockingShips.Count > 0)) continue; // undock once nobody is docking
-            if (pass == 1)
+            if (r.kind != (pass == 2 ? 2 : 1) || (pass == 3 && !r.emg) || dockingShips.Contains(r.ship) || (pass == 2 && dockingShips.Count > 0)) continue; // undock once nobody is docking
+            if (pass != 2)
             {
                 long c = PickDock(r);
                 if (c == 0) continue;
@@ -134,7 +137,7 @@ void GrantNext()
     clearedShip = pick.ship;
     clearedKind = pick.kind;
     clearedConn = pick.kind == 1 ? conn : 0;
-    clearedSince = DateTime.Now;
+    clearedSince = TimeNow();
 }
 
 void UpdateDockControl()
@@ -172,11 +175,13 @@ void HandleDockMessage(String data)
             if (StationConnector(home) == null) return; // that ship's home is not on this station
             DockRequest r = null;
             for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == ship) r = dockRequests[i];
-            if (r == null) { r = new DockRequest(); r.ship = ship; r.first = DateTime.Now; dockRequests.Add(r); }
+            if (r == null) { r = new DockRequest(); r.ship = ship; r.first = TimeNow(); dockRequests.Add(r); }
             int kind = int.Parse(f[2]);
-            if (r.kind != kind) r.first = DateTime.Now;
-            r.kind = kind; r.home = home; r.canUsePool = f[4] == "1"; r.last = DateTime.Now;
+            if (r.kind != kind) r.first = TimeNow();
+            r.kind = kind; r.home = home; r.canUsePool = f[4] == "1"; r.last = TimeNow();
             r.usable = f.Length >= 6 ? "," + f[5] + "," : null;
+            r.bad = f.Length >= 7 ? "," + f[6] + "," : "";
+            r.emg = f.Length >= 8 && f[7] == "1";
         }
     }
     catch { }
@@ -185,12 +190,12 @@ void HandleDockMessage(String data)
 void RunDockControl()
 {
     for (int i = dockRequests.Count - 1; i >= 0; i--)
-        if ((DateTime.Now - dockRequests[i].last).TotalSeconds > 3) dockRequests.RemoveAt(i);
+        if ((TimeNow() - dockRequests[i].last).TotalSeconds > 3) dockRequests.RemoveAt(i);
     DockRequest cleared = null;
     for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == clearedShip) cleared = dockRequests[i];
     if (clearedShip != 0 && cleared == null) clearedShip = 0;
-    if (cleared != null && (DateTime.Now - clearedSince).TotalSeconds > CLEARANCE_TIMEOUT)
-    { clearedShip = 0; cleared.first = DateTime.Now; } // too slow: back of the queue
+    if (cleared != null && (TimeNow() - clearedSince).TotalSeconds > CLEARANCE_TIMEOUT)
+    { clearedShip = 0; cleared.first = TimeNow(); } // too slow: back of the queue
     // ships on their last leg that stopped asking (docked, or gave up): done
     for (int i = dockingShips.Count - 1; i >= 0; i--)
     {
@@ -238,7 +243,7 @@ String GetDockAreaLine()
     for (int i = 0; i < stationDocks.Count; i++) if (IsDockFree(stationDocks[i])) free++;
     return "Docks: " + free + "/" + stationDocks.Count + " free" + (clearedShip != 0 ? (clearedKind == 1 ? " | coming in" : " | undocking") : "") +
         (dockingShips.Count > 0 ? " | docking: " + dockingShips.Count : "") +
-        (dockRequests.Count > 1 ? " | " + (dockRequests.Count - 1) + " waiting" : "") + (dockAreaStatus != "" ? "\n" + dockAreaStatus : "") + "\n";
+        (dockRequests.Count > 1 ? " | " + (dockRequests.Count - 1) + " waiting" : "") + (dockRequests.Exists(q => q.emg) ? " | EMERGENCY" : "") + (dockAreaStatus != "" ? "\n" + dockAreaStatus : "") + "\n";
 }
 
 // connector already given to a cleared ship that hasn't connected yet

@@ -178,6 +178,7 @@ void CalculateToolDimensions()
         if (c == 0 || y < y0) y0 = y;
         if (c == 0 || y > y1) y1 = y;
     }
+    gridHalf = new Vector3(g.Max - g.Min + Vector3I.One) * g.GridSize * 0.5f;
     shipFootWidth = x1 - x0 + g.GridSize;
     shipFootHeight = y1 - y0 + g.GridSize;
 }

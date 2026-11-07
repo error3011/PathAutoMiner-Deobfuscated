@@ -21,6 +21,8 @@ long homeConnId = 0;          // base connector of the recorded home dock (0 = n
 long poolDockId = 0;          // pool connector in use (0 = own home dock)
 WaypointInfo poolDock = null; // ship pose at that connector (null = own home dock)
 bool dockWaiting = false;
+List<long> badDocks = new List<long>(); // connectors that didn't lock 3 times: not used again until docked somewhere
+int dockTries = 0;
 
 // Ship pose (as a dock waypoint) when locked to a base connector with this position/orientation.
 WaypointInfo DockPose(Vector3 pos, Vector3 fwd, Vector3 up)
@@ -58,8 +60,9 @@ int DockPhase()
     if (s == NavState.Idle) return FindConnector(MyShipConnectorStatus.Connected) != null ? 3 : 0; // idle but docked still holds the connector
     if (s == NavState.Docking || s == NavState.Unloading || s == NavState.Charging || s == NavState.WaitUranium ||
         s == NavState.FillHydrogen || s == NavState.Undocking) return 3;
-    if (s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.RetryDocking) return 2;
-    if (s == NavState.FlyToDockArea) return 1;
+    // last leg: in the connector's lane (the station clears the next ship from here)
+    if ((s == NavState.ApproachDock && !toLane) || s == NavState.AlignDock || s == NavState.RetryDocking) return 2;
+    if (s == NavState.FlyToDockArea || s == NavState.ApproachDock) return 1;
     return 0;
 }
 
@@ -125,15 +128,15 @@ bool ChooseDock(int phase)
 {
     if (shipMode == ShipMode.Shuttle || !trafficEnabled) { poolDock = null; poolDockId = 0; return true; }
     long current = poolDock != null ? poolDockId : homeConnId;
-    if (!IsDockTaken(current, phase)) return true;
-    if (!IsDockTaken(homeConnId, phase)) { poolDock = null; poolDockId = 0; return true; }
+    if (!IsDockTaken(current, phase) && !badDocks.Contains(current)) return true;
+    if (!IsDockTaken(homeConnId, phase) && !badDocks.Contains(homeConnId)) { poolDock = null; poolDockId = 0; return true; }
     if (!dockRelSet) return false;
     PoolDock best = null;
     float bestDist = 0;
     for (int i = 0; i < dockPool.Count; i++)
     {
         PoolDock p = dockPool[i];
-        if (p.id == homeConnId || IsDockTaken(p.id, phase) || !PoseOk(p)) continue;
+        if (p.id == homeConnId || IsDockTaken(p.id, phase) || !PoseOk(p) || badDocks.Contains(p.id)) continue;
         float d = Vector3.Distance(p.pos, homeDock.position);
         if (best == null || d < bestDist) { best = p; bestDist = d; }
     }

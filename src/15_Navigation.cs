@@ -62,6 +62,8 @@ void UpdateNavigation()
     // The full implementation follows the same flow as the obfuscated version
     // with meaningful variable names applied throughout.
 
+    waitingHere = false; // set again below by every branch that holds the ship waiting
+
     // [FlyToXY] -> determine next hole, fly to surface position
     if (currentNavState == NavState.FlyToXY)
     {
@@ -85,11 +87,14 @@ void UpdateNavigation()
                     coopWaiting = true; coopWaitAside = claimed == -2;
                     // waiting spot: on a ring 2.5 ship sizes above the job centre, above everyone working
                     // or passing (always clear of terrain), each ship on its own place of the ring
-                    double a = (myGridId % 6) * Math.PI / 3;
+                    int slot = 0; // rank among the ships on this job
+                    for (int i = 0; i < traffic.Count; i++) if (traffic[i].job == JobKey() && traffic[i].id < myGridId) slot++;
+                    double a = slot % 6 * Math.PI / 3;
                     coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter * 2.5f +
                         (jobPosition.leftDir * (float)Math.Cos(a) + miningDown * (float)Math.Sin(a)) * shipDiameter * 1.2f;
                 }
                 SetFlightTarget(coopWaitPos, 10);
+                waitingHere = true;
                 statusMessage = coopWaitAside ? "Waiting for a free hole" : "Waiting for the controller";
                 return;
             }
@@ -357,6 +362,16 @@ void UpdateNavigation()
             currentPathWaypoint = null;
         }
 
+        // emergency landing: no longer told to wait (cleared, or a dock is free) -> power up, climb back
+        // to where it came down from, then on
+        if (currentNavState == NavState.FlyToDockArea && emgStage > 0 && ++emgFree > 3)
+        {
+            if (emgStage < 3) { emgStage = 3; SetBlocksEnabled(thrusters, true); SetLandingGears(landingGears, false); AlignToDown(downDirection, forwardDirection, leftDirection, true); }
+            SetFlightTarget(emgStart, 5);
+            if (distToTarget > wpReachedDist) { statusMessage = "Emergency: taking off"; return; }
+            emgStage = 0;
+        }
+
         if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick && !StationHandlesMe())
         {
             WaypointInfo before = GetCurrentDock();
@@ -377,6 +392,8 @@ void UpdateNavigation()
             Vector3 next = pathDirection != 0 && nextIdx >= 0 && nextIdx < waypoints.Count ? waypoints[nextIdx].position : pathFollowData.target.position;
             if (HoldForDockArea(cur, next))
             {
+                waitingHere = true;
+                if (emergency && !outOfService) { EmergencyLand(); return; }
                 if (!dockHoldSet) { dockHoldSet = true; dockHoldPos = InDockZone(cur) ? shipPosition : cur; }
                 SetFlightTarget(dockHoldPos, 0); // keeps facing the way it flew in; turns to the dock once cleared
                 if (!outOfService) statusMessage = "Waiting for dock clearance";
@@ -434,9 +451,14 @@ void UpdateNavigation()
         {
             waypointsRemaining = 0;
             // station dock control: wait at the path end until the station clears this ship
-            if (currentNavState == NavState.FlyToDockArea && !CheckDockClearance()) { SetFlightTarget(navTargetPos, 0); return; }
-            if (currentNavState == NavState.FlyToDockArea && dockWaiting)
-            { SetFlightTarget(navTargetPos, 0); statusMessage = "Waiting for a free dock"; return; }
+            bool noClear = currentNavState == NavState.FlyToDockArea && !CheckDockClearance();
+            if (noClear || currentNavState == NavState.FlyToDockArea && dockWaiting)
+            {
+                waitingHere = true;
+                if (emergency) EmergencyLand();
+                else { SetFlightTarget(navTargetPos, 0); if (!noClear) statusMessage = "Waiting for a free dock"; }
+                return;
+            }
             if (currentNavState == NavState.FlyToDockArea || shipMode == ShipMode.Shuttle) { SetNavState(NavState.ApproachDock); return; }
             if (currentNavState == NavState.FlyToJobArea && returnToJobAfter) { SetNavState(NavState.FlyToJobPos); return; }
             if (currentNavState == NavState.FlyToJobArea) { SetNavState(NavState.FlyToXY); return; }
@@ -455,7 +477,7 @@ void UpdateNavigation()
         {
             // dock pool: a ship already docking/docked there has priority -> back to the path end
             WaypointInfo before = GetCurrentDock();
-            if (!ChooseDock(2) || GetCurrentDock() != before) { SetNavState(NavState.FlyToDockArea); return; }
+            if (!ChooseDock(Math.Max(1, DockPhase())) || GetCurrentDock() != before) { SetNavState(NavState.FlyToDockArea); return; }
         }
         WaypointInfo dock = GetCurrentDock();
         if (stateFirstTick)
@@ -484,7 +506,20 @@ void UpdateNavigation()
         // reached the point beside the obstacle: from here straight to the connector again
         if (detourShift.LengthSquared() > 0 && distToTarget < wpReachedDist && distToTarget != -1) { detourShift = new Vector3(); return; }
         if (distToTarget < wpReachedDist / 2 && distToTarget != -1)
-        { SetNavState(NavState.AlignDock); return; }
+        {
+            // the connector didn't lock 3 times: leave it, ask for another one
+            if (dockTries >= 3 && shipMode != ShipMode.Shuttle)
+            {
+                badDocks.Add(poolDock != null ? poolDockId : homeConnId);
+                dockTries = 0;
+                ReleaseDock();
+                SetNavState(NavState.FlyToDockArea);
+                statusMessage = "Docking failed: trying another connector";
+                return;
+            }
+            SetNavState(NavState.AlignDock);
+            return;
+        }
     }
 
     // [AlignDock / AlignJob] -> precise alignment
@@ -530,7 +565,7 @@ void UpdateNavigation()
         if (stateFirstTick)
         {
             stuckSensitivity = 0;
-            dockStartTime = DateTime.Now;
+            dockStartTime = TimeNow();
             stuckCounter = 0;
             AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false);
         }
@@ -582,7 +617,7 @@ void UpdateNavigation()
             float distRounded = (float)Math.Round(distToTarget, 1);
             if (distRounded < lastDistToTarget) { stuckCounter = -1; lastDistToTarget = distRounded; }
             else stuckCounter++;
-            if (stuckCounter > 20) { SetNavState(NavState.RetryDocking); return; }
+            if (stuckCounter > 20) { dockTries++; SetNavState(NavState.RetryDocking); return; }
         }
     }
 
@@ -600,6 +635,7 @@ void UpdateNavigation()
         if (stateFirstTick)
         {
             simulateShipFull = false;
+            dockTries = 0; badDocks.Clear();
             if (FindConnector(MyShipConnectorStatus.Connected) == null) { SetNavState(NavState.Undocking); return; }
             StopFlight();
             if (atHome) TriggerTimerBlock(undockConfig1.dockTimerName);

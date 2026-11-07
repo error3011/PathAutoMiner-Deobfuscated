@@ -40,7 +40,7 @@ void UpdateFlight()
 
     thrustForce = shipMass * desiredVelocity - localGravity * shipMass;
     ApplyThrustOverride(thrustForce, thrustActive);
-    distToTarget = Vector3.Distance(shipPosition, flyTarget);
+    distToTarget = Vector3.Distance(shipPosition, navTargetPos + detourShift); // reached the target, not the point traffic steers to
 }
 
 float SmoothThrust(float value, ref float state, float step, float maxThrust, float maxMultiplier)

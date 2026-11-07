@@ -58,7 +58,7 @@ void ShipMainLoop(string argument)
             ScanCameras();
             if (setupErrorLevel <= 1) LearnDocks();
             EndProfile("Scan 3");
-            lastScanTime = DateTime.Now;
+            lastScanTime = TimeNow();
 
             if (setupErrorLevel <= 1 && needPositionUpdate)
                 referencePosition = GetLocalPosition(remoteControl, remoteControl.CenterOfMass);
