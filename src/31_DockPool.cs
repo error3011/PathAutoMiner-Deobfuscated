@@ -35,6 +35,23 @@ WaypointInfo DockPose(Vector3 pos, Vector3 fwd, Vector3 up)
     return w;
 }
 
+// Can this ship dock at that pool connector in its normal attitude (the one it has at home)? A
+// connector turned another way (on a wall, upside down) would need the ship turned too: in
+// gravity it can't fly like that. Also rejects broken data (zero / not perpendicular vectors).
+bool PoseOk(PoolDock p)
+{
+    if (!dockRelSet || Math.Abs(p.fwd.Length() - 1) > 0.05f || Math.Abs(p.up.Length() - 1) > 0.05f || Math.Abs(Vector3.Dot(p.fwd, p.up)) > 0.05f) return false;
+    return Vector3.Dot(DockPose(p.pos, p.fwd, p.up).downDir, homeDock.downDir) > 0.9f; // within ~25 degrees
+}
+
+// pool connectors this ship can use (sent to the station with the dock request)
+String UsablePool()
+{
+    String s = "";
+    for (int i = 0; i < dockPool.Count; i++) if (PoseOk(dockPool[i])) s += (s == "" ? "" : ",") + dockPool[i].id;
+    return s;
+}
+
 int DockPhase()
 {
     NavState s = currentNavState;
@@ -116,7 +133,7 @@ bool ChooseDock(int phase)
     for (int i = 0; i < dockPool.Count; i++)
     {
         PoolDock p = dockPool[i];
-        if (p.id == homeConnId || IsDockTaken(p.id, phase)) continue;
+        if (p.id == homeConnId || IsDockTaken(p.id, phase) || !PoseOk(p)) continue;
         float d = Vector3.Distance(p.pos, homeDock.position);
         if (best == null || d < bestDist) { best = p; bestDist = d; }
     }

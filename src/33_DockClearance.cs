@@ -62,7 +62,7 @@ void UpdateDockClearance()
     if (dockRequestKind != 0 && ++dockRequestTick >= 3)
     {
         dockRequestTick = 0;
-        IGC.SendBroadcastMessage(DOCK_TAG, "R;" + myGridId + ";" + dockRequestKind + ";" + homeConnId + ";" + (dockRelSet ? 1 : 0));
+        IGC.SendBroadcastMessage(DOCK_TAG, "R;" + myGridId + ";" + dockRequestKind + ";" + homeConnId + ";" + (dockRelSet ? 1 : 0) + ";" + UsablePool());
     }
 }
 
@@ -126,7 +126,7 @@ bool ApplyStationDock()
     dockWaiting = false;
     PoolDock pd = null;
     if (stationConn != 0 && stationConn != homeConnId && dockRelSet)
-        for (int i = 0; i < dockPool.Count; i++) if (dockPool[i].id == stationConn) pd = dockPool[i];
+        for (int i = 0; i < dockPool.Count; i++) if (dockPool[i].id == stationConn && PoseOk(dockPool[i])) pd = dockPool[i];
     long want = pd == null ? 0 : pd.id;
     if (want == poolDockId && (want == 0) == (poolDock == null)) return false;
     poolDockId = want;

@@ -16,6 +16,7 @@ class DockRequest
     public int kind; // 1 = dock, 2 = undock
     public long home;
     public bool canUsePool;
+    public String usable; // ",id,id," pool connectors the ship can dock at in its normal attitude (null: older build)
     public DateTime first, last;
 }
 
@@ -101,7 +102,7 @@ long PickDock(DockRequest r)
     for (int i = 0; i < stationDocks.Count; i++)
     {
         IMyShipConnector c = stationDocks[i];
-        if (!IsDockFree(c) || DockTaken(c.EntityId)) continue;
+        if (!IsDockFree(c) || DockTaken(c.EntityId) || (r.usable != null && !r.usable.Contains("," + c.EntityId + ","))) continue;
         double d = Vector3D.Distance(c.GetPosition(), home.GetPosition());
         if (best == null || d < bestDist) { if (IsLaneClear(c, r.ship)) { best = c; bestDist = d; } }
     }
@@ -175,6 +176,7 @@ void HandleDockMessage(String data)
             int kind = int.Parse(f[2]);
             if (r.kind != kind) r.first = DateTime.Now;
             r.kind = kind; r.home = home; r.canUsePool = f[4] == "1"; r.last = DateTime.Now;
+            r.usable = f.Length >= 6 ? "," + f[5] + "," : null;
         }
     }
     catch { }

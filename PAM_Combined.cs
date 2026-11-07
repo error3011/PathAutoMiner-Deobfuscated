@@ -6312,6 +6312,23 @@ WaypointInfo DockPose(Vector3 pos, Vector3 fwd, Vector3 up)
     return w;
 }
 
+// Can this ship dock at that pool connector in its normal attitude (the one it has at home)? A
+// connector turned another way (on a wall, upside down) would need the ship turned too: in
+// gravity it can't fly like that. Also rejects broken data (zero / not perpendicular vectors).
+bool PoseOk(PoolDock p)
+{
+    if (!dockRelSet || Math.Abs(p.fwd.Length() - 1) > 0.05f || Math.Abs(p.up.Length() - 1) > 0.05f || Math.Abs(Vector3.Dot(p.fwd, p.up)) > 0.05f) return false;
+    return Vector3.Dot(DockPose(p.pos, p.fwd, p.up).downDir, homeDock.downDir) > 0.9f; // within ~25 degrees
+}
+
+// pool connectors this ship can use (sent to the station with the dock request)
+String UsablePool()
+{
+    String s = "";
+    for (int i = 0; i < dockPool.Count; i++) if (PoseOk(dockPool[i])) s += (s == "" ? "" : ",") + dockPool[i].id;
+    return s;
+}
+
 int DockPhase()
 {
     NavState s = currentNavState;
@@ -6393,7 +6410,7 @@ bool ChooseDock(int phase)
     for (int i = 0; i < dockPool.Count; i++)
     {
         PoolDock p = dockPool[i];
-        if (p.id == homeConnId || IsDockTaken(p.id, phase)) continue;
+        if (p.id == homeConnId || IsDockTaken(p.id, phase) || !PoseOk(p)) continue;
         float d = Vector3.Distance(p.pos, homeDock.position);
         if (best == null || d < bestDist) { best = p; bestDist = d; }
     }
@@ -6453,6 +6470,7 @@ class DockRequest
     public int kind; // 1 = dock, 2 = undock
     public long home;
     public bool canUsePool;
+    public String usable; // ",id,id," pool connectors the ship can dock at in its normal attitude (null: older build)
     public DateTime first, last;
 }
 
@@ -6538,7 +6556,7 @@ long PickDock(DockRequest r)
     for (int i = 0; i < stationDocks.Count; i++)
     {
         IMyShipConnector c = stationDocks[i];
-        if (!IsDockFree(c) || DockTaken(c.EntityId)) continue;
+        if (!IsDockFree(c) || DockTaken(c.EntityId) || (r.usable != null && !r.usable.Contains("," + c.EntityId + ","))) continue;
         double d = Vector3D.Distance(c.GetPosition(), home.GetPosition());
         if (best == null || d < bestDist) { if (IsLaneClear(c, r.ship)) { best = c; bestDist = d; } }
     }
@@ -6612,6 +6630,7 @@ void HandleDockMessage(String data)
             int kind = int.Parse(f[2]);
             if (r.kind != kind) r.first = DateTime.Now;
             r.kind = kind; r.home = home; r.canUsePool = f[4] == "1"; r.last = DateTime.Now;
+            r.usable = f.Length >= 6 ? "," + f[5] + "," : null;
         }
     }
     catch { }
@@ -6744,7 +6763,7 @@ void UpdateDockClearance()
     if (dockRequestKind != 0 && ++dockRequestTick >= 3)
     {
         dockRequestTick = 0;
-        IGC.SendBroadcastMessage(DOCK_TAG, "R;" + myGridId + ";" + dockRequestKind + ";" + homeConnId + ";" + (dockRelSet ? 1 : 0));
+        IGC.SendBroadcastMessage(DOCK_TAG, "R;" + myGridId + ";" + dockRequestKind + ";" + homeConnId + ";" + (dockRelSet ? 1 : 0) + ";" + UsablePool());
     }
 }
 
@@ -6808,7 +6827,7 @@ bool ApplyStationDock()
     dockWaiting = false;
     PoolDock pd = null;
     if (stationConn != 0 && stationConn != homeConnId && dockRelSet)
-        for (int i = 0; i < dockPool.Count; i++) if (dockPool[i].id == stationConn) pd = dockPool[i];
+        for (int i = 0; i < dockPool.Count; i++) if (dockPool[i].id == stationConn && PoseOk(dockPool[i])) pd = dockPool[i];
     long want = pd == null ? 0 : pd.id;
     if (want == poolDockId && (want == 0) == (poolDock == null)) return false;
     poolDockId = want;
