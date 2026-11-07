@@ -339,7 +339,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
     // direction when stopped) -> move slowly out of its line, sideways (only in free flight; the
     // camera brake stops the ship if there's no room there)
     sidestep = false;
-    if (!precise && !cpaHold && shipSpeed < 2)
+    if (!precise && !cpaHold && shipSpeed < 1)
         for (int i = 0; i < traffic.Count; i++)
         {
             TrafficShip o = traffic[i];
@@ -347,6 +347,8 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             Vector3 oi = o.vel.LengthSquared() > 1 ? o.vel : o.heading;
             if (oi.LengthSquared() < 0.25f) continue;
             Vector3 od = Vector3.Normalize(oi);
+            // a ship going my way (behind me, following) never makes me move aside: it slows down
+            if (haveDir && Vector3.Dot(od, dir) > 0.3f) continue;
             Vector3 rel = shipPosition - o.pos;
             float along = Vector3.Dot(rel, od);
             Vector3 lat = rel - od * along;
