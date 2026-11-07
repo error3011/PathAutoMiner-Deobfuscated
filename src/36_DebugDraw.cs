@@ -9,6 +9,8 @@
 //    from the ship to its hole, white free)
 //  - docking area: [PAM-Zone] spheres, [PAM-Lane] camera rays, green line from the ship cleared
 //    to dock to its connector
+// Text labels (HUD markers) name the ships with their state, the conflicts (who gives way), the
+// claimed holes, the docking area and the cleared ship. The colour key is in the PB's output.
 // Without the mod nothing is drawn and nothing else changes.
 
 const String DBG_TAG = "[PAMDBG]";
@@ -22,6 +24,7 @@ class DebugAPI
     Func<IMyProgrammableBlock, Vector3D, Color, float, float, bool, int> _p;
     Func<IMyProgrammableBlock, Vector3D, Vector3D, Color, float, float, bool, int> _ln;
     Func<IMyProgrammableBlock, BoundingSphereD, Color, int, float, int, float, bool, int> _sph;
+    Func<IMyProgrammableBlock, string, Vector3D, Color?, float, int> _gps;
 
     public DebugAPI(MyGridProgram program)
     {
@@ -32,6 +35,7 @@ class DebugAPI
         _p = (Func<IMyProgrammableBlock, Vector3D, Color, float, float, bool, int>)methods["Point"];
         _ln = (Func<IMyProgrammableBlock, Vector3D, Vector3D, Color, float, float, bool, int>)methods["Line"];
         _sph = (Func<IMyProgrammableBlock, BoundingSphereD, Color, int, float, int, float, bool, int>)methods["Sphere"];
+        _gps = (Func<IMyProgrammableBlock, string, Vector3D, Color?, float, int>)methods["GPS"];
         ((Action<IMyProgrammableBlock>)methods["RemoveAll"])(_pb);
         ModDetected = true;
     }
@@ -39,6 +43,7 @@ class DebugAPI
     public void RemoveDraw() { if (_rmd != null) _rmd(_pb); }
     public void Line(Vector3D a, Vector3D b, Color c, float thickness) { if (_ln != null) _ln(_pb, a, b, c, thickness, -1, false); }
     public void Point(Vector3D a, Color c, float radius) { if (_p != null) _p(_pb, a, c, radius, -1, false); }
+    public void Label(String text, Vector3D at, Color c) { if (_gps != null) _gps(_pb, text, at, c, -1); }
     public void Sphere(Vector3D center, double radius, Color c) { if (_sph != null) _sph(_pb, new BoundingSphereD(center, radius), c, 1, 0.05f, 30, -1, false); }
 }
 
@@ -101,6 +106,7 @@ void UpdateDebugDraw()
         TCShip s = tcShips[i];
         Color c = TCParked(s) ? Color.Gray : s.limit >= 0 ? Color.Yellow : Color.Lime;
         dbg.Sphere(s.pos, s.dia / 2, c);
+        dbg.Label(TCName(s) + ": " + (TCParked(s) ? "parked" : s.limit == 0 ? "holding (giving way)" : s.limit > 0 ? "slowing (giving way)" : "moving"), s.pos, c);
         if (s.vel.LengthSquared() > 0.25f) dbg.Line(s.pos, s.pos + s.vel * 3, Color.White, 0.1f);
         if (s.heading.LengthSquared() > 0.25f) dbg.Line(s.pos, s.pos + s.heading * s.dia, Color.Cyan, 0.1f);
     }
@@ -114,7 +120,9 @@ void UpdateDebugDraw()
             if (tcShips[k].id == tcPairs[i].a) a = tcShips[k];
             if (tcShips[k].id == tcPairs[i].b) b = tcShips[k];
         }
-        if (a != null && b != null) dbg.Line(a.pos, b.pos, Color.Red, 0.2f);
+        if (a == null || b == null) continue;
+        dbg.Line(a.pos, b.pos, Color.Red, 0.2f);
+        dbg.Label("Conflict: " + TCName(tcPairs[i].yielder == a.id ? a : b) + " gives way", (a.pos + b.pos) / 2, Color.Red);
     }
     // what the ships send: flight target, camera rays, hole grid
     for (int i = 0; i < dbgShips.Count; i++)
@@ -128,13 +136,18 @@ void UpdateDebugDraw()
         JobRec job = null;
         for (int j = 0; j < jobs.Count; j++) if (jobs[j].key == t.job) job = jobs[j];
         if (job == null) continue;
+        int doneCount = 0;
+        for (int c = 0; c < job.done.Length; c++) if (job.done[c] == '1') doneCount++;
+        if (i == 0 || dbgShips[i - 1].jobPos != d.jobPos) dbg.Label("Job: " + doneCount + "/" + job.done.Length + " holes done", d.jobPos, Color.White);
         for (int c = 0; c < job.done.Length; c++)
         {
             int col = c % job.w, row = c / job.w;
             Vector3 p = d.jobPos + d.left * ((job.w - 1f) / 2f - col) * job.tw - d.down * ((job.h - 1f) / 2f - row) * job.th;
             JobShip owner = HoleOwner(job, c, null);
             dbg.Point(p, job.done[c] == '1' ? Color.Gray : owner != null ? Color.Orange : Color.White, Math.Min(job.tw, job.th) * 0.2f);
-            if (owner != null && owner.id == d.id) dbg.Line(t.pos, p, Color.Orange, 0.05f);
+            if (owner == null || owner.id != d.id) continue;
+            dbg.Line(t.pos, p, Color.Orange, 0.05f);
+            dbg.Label("Hole " + (job.order.IndexOf(c) + 1) + ": " + TCName(t), p, Color.Orange);
         }
     }
     // docking area
@@ -142,6 +155,7 @@ void UpdateDebugDraw()
     {
         IMySensorBlock z = zoneSensors[i];
         dbg.Sphere(z.GetPosition(), new Vector3D(Math.Max(z.LeftExtend, z.RightExtend), Math.Max(z.TopExtend, z.BottomExtend), Math.Max(z.FrontExtend, z.BackExtend)).Length(), Color.Cyan);
+        dbg.Label("Docking area" + (dockAreaStatus != "" ? ": " + dockAreaStatus : ""), z.GetPosition(), Color.Cyan);
     }
     for (int i = 0; i < laneCameras.Count; i++)
         dbg.Line(laneCameras[i].GetPosition(), laneCameras[i].GetPosition() + laneCameras[i].WorldMatrix.Forward * dockLaneLength, Color.Purple, 0.05f);
@@ -149,6 +163,37 @@ void UpdateDebugDraw()
     {
         IMyShipConnector c = StationConnector(clearedConn);
         for (int k = 0; k < tcShips.Count; k++)
-            if (c != null && tcShips[k].id == clearedShip) dbg.Line(tcShips[k].pos, c.GetPosition(), Color.Lime, 0.15f);
+            if (c != null && tcShips[k].id == clearedShip)
+            {
+                dbg.Line(tcShips[k].pos, c.GetPosition(), Color.Lime, 0.15f);
+                dbg.Label("Cleared to " + (clearedKind == 2 ? "undock: " : "dock: ") + TCName(tcShips[k]), c.GetPosition(), Color.Lime);
+            }
     }
+}
+
+// ship name from the controller's ship list (matched by position), else the end of its id
+String TCName(TCShip t)
+{
+    ShipInfo best = null;
+    for (int i = 0; i < connectedShips.Count; i++)
+        if (Vector3.Distance(connectedShips[i].position, t.pos) < 30 && (best == null ||
+            Vector3.Distance(connectedShips[i].position, t.pos) < Vector3.Distance(best.position, t.pos))) best = connectedShips[i];
+    if (best != null && best.name != "") return best.name;
+    String id = t.id.ToString();
+    return "Ship " + id.Substring(Math.Max(0, id.Length - 4));
+}
+
+// colour key and mod status for the PB's output
+String GetDebugDrawLegend()
+{
+    if (!debugDraw) return "";
+    if (dbg == null || !dbg.ModDetected) return "\nDebug draw: DebugAPI mod not found (offline world + mod needed, then recompile)\n";
+    return "\nDebug draw: on\n" +
+        "Ship sphere: green moving, yellow giving way, grey parked\n" +
+        "White: where it is in 3 s, cyan: where it wants to go\n" +
+        "Red line: collision course (label: who gives way)\n" +
+        "Blue: flight target; thin green/red: camera rays (clear/hit)\n" +
+        "Points: grey hole done, orange claimed, white free\n" +
+        "Cyan sphere: docking area, purple: lane cameras\n" +
+        "Thick green: ship cleared to its connector\n";
 }

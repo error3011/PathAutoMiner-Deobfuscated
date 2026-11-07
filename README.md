@@ -155,6 +155,8 @@ Behaviour follows the original script (`PAM_ORIGINAL.cs`). Fixes on top of it:
   - a red line between two ships the controller sees on a collision course.
   - from the ships: a blue line to the flight target, the camera rays (green clear, red hit), and each job's hole grid: grey done, orange claimed (with a line from the ship to its hole), white free.
   - the docking area: `[PAM-Zone]` spheres, `[PAM-Lane]` camera rays (purple), and a green line from the ship cleared to dock to its connector.
+  - text labels (HUD markers): each ship's name and state (moving, slowing/holding while giving way, parked), each conflict with who gives way, each claimed hole with its ship, the job's progress, the docking area with its status, and the ship cleared to dock or undock.
+  - the colour key, and whether the mod was found, are in the controller PB's output (the text on the right when you select the PB in the terminal).
 - **Controller command feedback:** the result of a command (received / pending / no answer) is shown only on the page it was sent from and disappears after 20 s, with one line per ship it went to.
 - **Controller arguments:** `SEND` / `SENDALL` without a target or command show usage instead of crashing.
 - Scan interval uses total elapsed seconds (was the 0-59 seconds component).

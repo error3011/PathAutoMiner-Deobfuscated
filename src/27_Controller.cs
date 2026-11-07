@@ -263,7 +263,7 @@ void UpdateControllerDisplays()
         ParseLCDMode(lcdPanels[i], out mode, out param);
         lcdPanels[i].WriteText(BuildControllerScreenForMode(mode, param, i == 0));
     }
-    Echo(echoText);
+    Echo(echoText + GetDebugDrawLegend());
     for (int i = 0; i < debugPanels.Count; i++)
     {
         IMyTextPanel panel = debugPanels[i];
