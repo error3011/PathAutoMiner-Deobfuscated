@@ -7,6 +7,7 @@ void ChangeOverlap(bool isWidth, float step)
     if (isWidth) AdjustConfig(ref widthOverlap, step, ConfigType.Overlap, false);
     else AdjustConfig(ref heightOverlap, step, ConfigType.Overlap, false);
     CalculateToolDimensions();
+    jobToolW = toolWidth; jobToolH = toolHeight; // new overlap: new hole spacing for the job
     UpdateSensor(true, true, 0, 0);
 }
 

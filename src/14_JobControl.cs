@@ -78,6 +78,7 @@ void StartNewJob()
     miningForward = referenceWorkTool.WorldMatrix.Forward;
     miningDown = jobPosition.downDir;
     if (miningForward == remoteControl.WorldMatrix.Down) miningDown = remoteControl.WorldMatrix.Backward;
+    jobToolW = toolWidth; jobToolH = toolHeight;
     UpdateJobConfig(true, true);
     SetNavState(NavState.FlyToXY);
     StartJobCommon();
@@ -100,6 +101,7 @@ void UpdateJobConfig(bool force, bool resetProgress)
         jobHeight = configHeight;
         holeRow = 0; holeCol = 0;
         doneHoles = ""; myHole = -1;
+        jobSerial = (int)(DateTime.Now.Ticks / 10000000 % 1000000);
         maxMineDepth = 0; lastHoleIndex = 0;
         currentMineDepth = 0; currentHoleIndex = 0;
         UpdateProgress(true);

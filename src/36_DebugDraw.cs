@@ -175,6 +175,7 @@ void UpdateDebugDraw()
 String TCName(TCShip t)
 {
     ShipInfo best = null;
+    for (int i = 0; i < connectedShips.Count; i++) if (t.pb != 0 && connectedShips[i].id == "" + t.pb) return connectedShips[i].name;
     for (int i = 0; i < connectedShips.Count; i++)
         if (Vector3.Distance(connectedShips[i].position, t.pos) < 30 && (best == null ||
             Vector3.Distance(connectedShips[i].position, t.pos) < Vector3.Distance(best.position, t.pos))) best = connectedShips[i];

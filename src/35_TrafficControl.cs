@@ -13,7 +13,7 @@ const float TCC_HORIZON = 8f; //[s] how far ahead conflicts are predicted
 
 class TCShip
 {
-    public long id;
+    public long id, pb; // grid id (traffic), PB id (the controller's ship list)
     public Vector3 pos, vel, heading;
     public float dia, fw, fh, limit = -1;
     public int jobFlag; // 1 in the job area, 2 deep in its hole
@@ -54,6 +54,7 @@ void HandleTrafficControl(String data)
         String[] w = f[10].Split(',');
         if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); if (w.Length >= 5) s.prio = int.Parse(w[4]); }
     }
+    s.pb = f.Length >= 12 ? long.Parse(f[11]) : 0;
     s.time = DateTime.Now;
 }
 
@@ -174,6 +175,7 @@ bool homeCurrentDocked = false;
 TCShip FindTCShip(ShipInfo s)
 {
     TCShip best = null;
+    for (int i = 0; i < tcShips.Count; i++) if (tcShips[i].pb != 0 && "" + tcShips[i].pb == s.id) return tcShips[i];
     for (int i = 0; i < tcShips.Count; i++)
         if (Vector3.Distance(tcShips[i].pos, s.position) < 15 && (best == null ||
             Vector3.Distance(tcShips[i].pos, s.position) < Vector3.Distance(best.pos, s.position))) best = tcShips[i];

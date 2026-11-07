@@ -35,6 +35,8 @@ ShipMode shipMode = ShipMode.Unknown;
 int setupErrorLevel = 0;
 float toolWidth = 0;
 float toolHeight = 0;
+int jobSerial = 0; // new number each time a job is set up: a job set up again at the same spot is a new co-op job
+float jobToolW = 0, jobToolH = 0; // drill area the job was set up with (hole spacing); 0: older save, use the ship's
 float shipDiameter = 0;
 float shipFootWidth = 0, shipFootHeight = 0; // ship size across the drill face
 

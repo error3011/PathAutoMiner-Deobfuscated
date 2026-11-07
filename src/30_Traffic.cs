@@ -45,11 +45,16 @@ int myHole = -1;              // grid cell of the hole this ship works on
 bool coopWaiting = false, coopWaitAside = false, exitRise = false;
 Vector3 coopWaitPos = new Vector3();
 
+// hole spacing of the job: the drill area it was set up with (or imported with), so a ship that
+// loses or gains a drill keeps the same grid as the other ships
+float JTW() { return jobToolW > 0 ? jobToolW : toolWidth; }
+float JTH() { return jobToolH > 0 ? jobToolH : toolHeight; }
+
 String JobKey()
 {
     if (jobState == JobState.NoJob || shipMode == ShipMode.Shuttle) return "";
     return Math.Round(jobPosition.position.X) + "|" + Math.Round(jobPosition.position.Y) + "|" + Math.Round(jobPosition.position.Z) +
-        "|" + jobWidth + "|" + jobHeight + "|" + (int)jobStartPos + "|" + Math.Round(toolWidth, 1) + "|" + Math.Round(toolHeight, 1);
+        "|" + jobWidth + "|" + jobHeight + "|" + (int)jobStartPos + "|" + Math.Round(JTW(), 1) + "|" + Math.Round(JTH(), 1) + "|" + jobSerial;
 }
 
 void UpdateTraffic()
@@ -93,7 +98,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio());
+        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + ";" + Me.GetId());
 }
 
 void ParseTraffic(String data)
@@ -172,7 +177,7 @@ bool InJobArea()
         s == NavState.ReturnToDock || s == NavState.FlyToDropPos);
 }
 
-float JobRadius() { return 0.5f * (float)Math.Sqrt(Math.Pow(jobWidth * toolWidth, 2) + Math.Pow(jobHeight * toolHeight, 2)); }
+float JobRadius() { return 0.5f * (float)Math.Sqrt(Math.Pow(jobWidth * JTW(), 2) + Math.Pow(jobHeight * JTH(), 2)); }
 
 bool NearJobArea() { return JobKey() != "" && Vector3.Distance(shipPosition, jobPosition.position) < JobRadius() + shipDiameter * 2; }
 
@@ -260,7 +265,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         bool sameJob = other.job != "" && other.job == JobKey();
         if (sameJob && other.jobFlag == 2) continue; // inside the rock in its own hole: can't be in anyone's way
         bool sideBySide = sameJob && other.jobFlag == 1 && InJobArea();
-        if (sideBySide) clear = Math.Min(toolWidth, toolHeight) * 0.9f;
+        if (sideBySide) clear = Math.Min(JTW(), JTH()) * 0.9f;
         float corridor = clear * (sideBySide ? 1f : 1.2f); // side by side: a ship at the next hole is outside it
         float along = haveDir ? Vector3.Dot(rel, dir) : 0;
         if (along > 0 && (rel - dir * along).Length() <= corridor)

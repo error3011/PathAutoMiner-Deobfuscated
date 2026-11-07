@@ -64,7 +64,7 @@ String BuildSaveData()
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
     // section 5 (co-op holes) was added after 1.3.1; older saves simply don't have it
     AppendStorage(";", false);
-    AppendStorage(doneHoles + "|" + myHole, false);
+    AppendStorage(doneHoles + "|" + myHole + "|" + jobToolW + "|" + jobToolH + "|" + jobSerial, false);
     // section 6 (dock pool)
     AppendStorage(";", false);
     AppendStorage(DockPoolToString(), false);
@@ -169,6 +169,9 @@ DataResult RestoreFrom(String data)
         lines = SafeElement(sections, 5).Split('|');
         doneHoles = SafeElement(lines, 0);
         if (!int.TryParse(SafeElement(lines, 1), out myHole)) myHole = -1;
+        if (!float.TryParse(SafeElement(lines, 2), out jobToolW)) jobToolW = 0;
+        if (!float.TryParse(SafeElement(lines, 3), out jobToolH)) jobToolH = 0;
+        if (!int.TryParse(SafeElement(lines, 4), out jobSerial)) jobSerial = 0;
         if (doneHoles.Length != jobWidth * jobHeight) { doneHoles = ""; myHole = -1; } // older save: rows, not holes
         DockPoolFromString(SafeElement(sections, 6));
     }
@@ -238,13 +241,15 @@ void ImportText(String data, bool jobOnly)
         int w = configWidth, h = configHeight, d = configDepth;
         StartPosition start = startPosition;
         DepthMode depth = depthMode;
-        float overlapW = widthOverlap, overlapH = heightOverlap;
+        float overlapW = widthOverlap, overlapH = heightOverlap, jtw = jobToolW, jth = jobToolH;
+        int serial = jobSerial;
         RestoreFrom(backup);
         jobPosition = job; miningForward = mineForward; miningDown = mineDown;
         configWidth = w; configHeight = h; configDepth = d;
         startPosition = start; depthMode = depth; widthOverlap = overlapW; heightOverlap = overlapH;
         jobState = JobState.Paused;
         UpdateJobConfig(true, true);
+        jobToolW = jtw; jobToolH = jth; jobSerial = serial; // the exporting ship's job: same grid and key on every ship
         jobState = JobState.Paused; lastJobState = JobState.Paused;
         statusMessage = "Imported job, run CONT";
         return;

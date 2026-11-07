@@ -179,6 +179,14 @@ def make_variant(source, variant):
         text = source[s:e]
         items.append({"text": text, "name": _method_name(text)})
 
+    # a comment at the end of an item's last line belongs to that item, not to the next one
+    for i in range(1, len(items)):
+        m = re.match(r"[ \t]*//[^\n]*", items[i]["text"])
+        if m:
+            items[i - 1]["text"] += m.group(0)
+            items[i]["text"] = items[i]["text"][m.end():]
+            items[i]["name"] = _method_name(items[i]["text"])
+
     remove = set(cfg["remove"])
     items = [it for it in items if it["name"] not in remove]
     items.append({"text": "\n" + cfg["stub"] + "\n", "name": cfg["remove"][0]})
@@ -217,6 +225,8 @@ def make_variant(source, variant):
             dropped.append(it["decl"][0])
             # keep leading comments (section banners, the settings end marker) of a dropped method
             lead = re.match(r"(?:\s*(?://[^\n]*(?:\n|$)|/\*.*?\*/))*", it["text"], re.S).group(0)
+            if not it["name"]:  # a dropped setting/field: its comment goes too (section markers stay)
+                lead = "".join(l for l in lead.splitlines(True) if "=====" in l)
             kept.append(lead)
             continue
         kept.append(it["text"])

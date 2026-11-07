@@ -18,24 +18,24 @@ const string VERSION = "1.3.1";
 const string DATAREV = "14";
 
 // ===== Settings: edit the values below =====
+// (each script only lists the settings it uses; details in the README)
 
-const String pamTag = "[PAM]";
+const String pamTag = "[PAM]"; //LCDs of cockpits and other blocks: [PAM:<lcdIndex>] e.g. [PAM:1]
 const String controllerTag = "[PAM-Controller]";
 const String dataTag = "[PAM-Data]"; //EXPORT/IMPORT use the Custom Data of the block with this tag
-const String dockPoolTag = "[PAM-Dock]"; //base connectors in the dock pool (used when the ship's own home dock is taken)
+const String dockPoolTag = "[PAM-Dock]"; //base connectors ships may use when their own home dock is taken
 
-//Station dock control (on the [PAM-Controller] PB at the station): one ship at a time is cleared to
-//move in the docking area. Ships wait at the end of their path until cleared.
-const String zoneTag = "[PAM-Zone]"; //sensor(s) covering the docking area: no clearance while another ship moves inside
-const String laneTag = "[PAM-Lane]"; //camera next to a connector, facing out along its approach: lane must be clear
-const float dockLaneLength = 40f;//[m] how far the lane cameras check in front of their connector
-const float dockRequestDistance = 300f;//[m] ships ask the station for clearance this close to their home dock, and wait outside the [PAM-Zone] sensor area
-//Tag for LCD's of cockpits and other blocks: [PAM:<lcdIndex>] e.g: [PAM:1]
+//Station dock control ([PAM-Controller] PB at the station): one ship at a time in the docking area
+const String zoneTag = "[PAM-Zone]"; //sensor over the docking area: nobody cleared while another ship moves in it
+const String laneTag = "[PAM-Lane]"; //camera at a connector, facing out along its approach: lane must be clear
+const float dockLaneLength = 40f;//[m] how far the lane cameras check
+const float dockRequestDistance = 300f;//[m] ships ask for clearance this close to home, then wait outside the zone
 
 const int gyroSpeedSmall = 15; //[RPM] small ship
 const int gyroSpeedLarge = 5; //[RPM] large ship
 const int generalSpeedLimit = 100; //[m/s] 0 = no limit (if set to 0 ignore unreachable code warning)
 const float dockingSpeed = 0.5f; //[m/s]
+const float jobAreaSpeed = 10f;//[m/s] near the job area (between holes, backing out, arriving, leaving)
 
 //multiplied with ship size
 const float dockDist = 0.6f; //position in front of the home connector
@@ -46,7 +46,7 @@ const float useJobDirectionDist = 0f; //same as dock
 
 //other distances
 const float wpReachedDist = 2f;//[m]
-const float drillRadius = 1.4f;//[m] grinders and modded drills; vanilla drills use their real cut radius (small 1.3, large 1.9, prototech 6)
+const float drillRadius = 1.4f;//[m] grinders and modded drills (vanilla drills use their real cut radius)
 
 //grinding
 const float sensorRange = 2f;//fly slow when blocks found in this range
@@ -62,33 +62,23 @@ const float minEjection = 25f;//[%] Min amount of ejected cargo to continue job
 //LCD
 const bool setLCDFontAndSize = true;
 
-//Obstacle brake: cameras on the ship raycast towards the flight target and stop the ship when
-//something is in the way (path flights and hole-to-hole moves; off while mining and docking).
-//A camera only scans within 45° of where it faces: add cameras facing every direction the ship travels.
+//Obstacle brake: the ship's cameras scan where it flies and stop it when something is in the way.
+//A camera scans within 45° of where it faces: add cameras facing every direction the ship travels.
 const bool obstacleBrake = true;
-const float obstacleLookAhead = 3f;//[s] scan distance = speed * this + ship size (the sweep covers the ship's width)
+const float obstacleLookAhead = 3f;//[s] scan distance = speed * this + ship size
 const float obstacleTimeout = 10f;//[s] show "Path blocked" after holding this long
 
-//Traffic between PAM ships (needs a working antenna; independent of Broadcast_Channel)
-//Ships keep right of the recorded path, keep distance to a PAM ship ahead, and ships on the
-//same job (IMPORT JOB) mine different rows of holes.
+//Traffic between PAM ships (needs an antenna): lanes, spacing, right of way, co-op holes (IMPORT JOB)
 const bool trafficEnabled = true;
-const float laneOffset = 0.75f;//multiplied with ship size: how far to keep right of the path; 0 = fly on the path
-const float followGap = 1f;//multiplied with ship size: free space kept behind a PAM ship ahead
+const float laneOffset = 0.75f;//x ship size: keep right of the path; 0 = fly on the path
+const float followGap = 1f;//x ship size: free space behind a PAM ship ahead
 
-//Server restart / world load
-const bool resumeAfterRestart = true;//continue a job that was running when the world was saved (false = stay paused, like the original)
+const bool resumeAfterRestart = true;//continue a running job after a server restart / world load
 
 //Check if blocks are connected with conveyors
 const bool checkConveyorSystem = false;//temporarily disabled because of a SE bug
 
-//Speed limit near the job area (moving between holes, backing out, arriving and leaving), so ships
-//working next to each other don't change direction fast or bump into each other.
-const float jobAreaSpeed = 10f;//[m/s]
-
-//Debug drawing in 3D (offline worlds, needs Digi's "(DevTool) Programmable Block DebugAPI" mod):
-//on the [PAM-Controller] PB it draws ships, traffic, docking area and hole grids; on the ships it
-//sends their flight target, camera rays and job grid to the controller to draw. Off on a server.
+//3D debug drawing (offline world + Digi's "(DevTool) Programmable Block DebugAPI" mod), see README
 const bool debugDraw = false;
 
 // ===== End of settings: don't edit below this line =====
@@ -380,6 +370,8 @@ ShipMode shipMode = ShipMode.Unknown;
 int setupErrorLevel = 0;
 float toolWidth = 0;
 float toolHeight = 0;
+int jobSerial = 0; // new number each time a job is set up: a job set up again at the same spot is a new co-op job
+float jobToolW = 0, jobToolH = 0; // drill area the job was set up with (hole spacing); 0: older save, use the ship's
 float shipDiameter = 0;
 float shipFootWidth = 0, shipFootHeight = 0; // ship size across the drill face
 
@@ -1546,6 +1538,7 @@ void ChangeOverlap(bool isWidth, float step)
     if (isWidth) AdjustConfig(ref widthOverlap, step, ConfigType.Overlap, false);
     else AdjustConfig(ref heightOverlap, step, ConfigType.Overlap, false);
     CalculateToolDimensions();
+    jobToolW = toolWidth; jobToolH = toolHeight; // new overlap: new hole spacing for the job
     UpdateSensor(true, true, 0, 0);
 }
 
@@ -1820,7 +1813,7 @@ Vector3 GetJobGridPosition(int col, int row, bool recalc)
     if (!recalc && gridPosCached) return cachedGridPos;
     float colOffset = ((jobWidth - 1f) / 2f) - col;
     float rowOffset = ((jobHeight - 1f) / 2f) - row;
-    cachedGridPos = jobPosition.position + jobPosition.leftDir * colOffset * toolWidth + miningDown * -1 * rowOffset * toolHeight;
+    cachedGridPos = jobPosition.position + jobPosition.leftDir * colOffset * JTW() + miningDown * -1 * rowOffset * JTH();
     gridPosCached = true;
     return cachedGridPos;
 }
@@ -1911,6 +1904,7 @@ void StartNewJob()
     miningForward = referenceWorkTool.WorldMatrix.Forward;
     miningDown = jobPosition.downDir;
     if (miningForward == remoteControl.WorldMatrix.Down) miningDown = remoteControl.WorldMatrix.Backward;
+    jobToolW = toolWidth; jobToolH = toolHeight;
     UpdateJobConfig(true, true);
     SetNavState(NavState.FlyToXY);
     StartJobCommon();
@@ -1933,6 +1927,7 @@ void UpdateJobConfig(bool force, bool resetProgress)
         jobHeight = configHeight;
         holeRow = 0; holeCol = 0;
         doneHoles = ""; myHole = -1;
+        jobSerial = (int)(DateTime.Now.Ticks / 10000000 % 1000000);
         maxMineDepth = 0; lastHoleIndex = 0;
         currentMineDepth = 0; currentHoleIndex = 0;
         UpdateProgress(true);
@@ -2230,8 +2225,11 @@ void UpdateNavigation()
                 if (!coopWaiting || (claimed == -2) != coopWaitAside)
                 {
                     coopWaiting = true; coopWaitAside = claimed == -2;
-                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter +
-                        jobPosition.leftDir * (jobWidth * toolWidth / 2 + shipFootWidth / 2 + shipDiameter / 2);
+                    // waiting spot: on a ring 2.5 ship sizes above the job centre, above everyone working
+                    // or passing (always clear of terrain), each ship on its own place of the ring
+                    double a = (myGridId % 6) * Math.PI / 3;
+                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter * 2.5f +
+                        (jobPosition.leftDir * (float)Math.Cos(a) + miningDown * (float)Math.Sin(a)) * shipDiameter * 1.2f;
                 }
                 SetFlightTarget(coopWaitPos, 10);
                 statusMessage = coopWaitAside ? "Waiting for a free hole" : "Waiting for the controller";
@@ -2254,9 +2252,11 @@ void UpdateNavigation()
                 stuckCounter = 1;
                 SetBlocksEnabled(workTools, true);
                 miningTargetPos = GetJobGridPosition(holeCol, holeRow, true);
-                // ship above the job plane (e.g. from the waiting spot): first over the hole at this
-                // height, then straight down to it
+                // over other holes (not the next one; also when arriving from the path or the waiting
+                // spot): first over the hole, at least one ship size above the job surface, then straight
+                // down to it
                 float h = Vector3.Dot(shipPosition - miningTargetPos, miningForward);
+                if ((shipPosition - miningTargetPos - miningForward * h).Length() > Math.Max(JTW(), JTH()) * 1.5f) h = Math.Min(h, -shipDiameter);
                 SetFlightTarget(h < -1 ? miningTargetPos + miningForward * h : miningTargetPos, 10);
                 AlignToDown(jobPosition.downDir, jobPosition.forwardDir, jobPosition.leftDir, false);
             }
@@ -2271,13 +2271,17 @@ void UpdateNavigation()
                 SetNavState(NavState.Mining);
                 return;
             }
-            // over the hole but the ground stops the way down (terrain above the job plane): start
-            // the hole where the ship is (drills are on)
-            Vector3 off = miningTargetPos - shipPosition;
-            float along = Vector3.Dot(off, miningForward);
-            if (along > 0 && (off - miningForward * along).Length() < wpReachedDist && shipSpeed < 0.3f)
+            // no progress for 5 s (not held by traffic or the cameras): over the hole, the ground is in
+            // the way down (terrain above the job surface) -> start the hole here (drills are on);
+            // elsewhere a hill is in the way -> go over it, one ship size higher, then down
+            if (shipSpeed < 0.3f && trafficSpeedLimit < 0 && !pathBlocked)
             {
-                if (++stuckCounter > 30) { cachedGridPos = shipPosition; SetNavState(NavState.Mining); }
+                if (++stuckCounter < 30) return;
+                stuckCounter = 1;
+                Vector3 off = miningTargetPos - shipPosition;
+                float along = Vector3.Dot(off, miningForward);
+                if (along > 0 && (off - miningForward * along).Length() < wpReachedDist) { cachedGridPos = shipPosition; SetNavState(NavState.Mining); }
+                else SetFlightTarget(miningTargetPos + miningForward * (Math.Min(0, -along) - shipDiameter), 10);
                 return;
             }
             stuckCounter = 1;
@@ -2385,6 +2389,10 @@ void UpdateNavigation()
         if (stateFirstTick)
         {
             miningTargetPos = GetJobGridPosition(holeCol, holeRow, false);
+            // heading home but not in a hole (e.g. low on energy while waiting): straight to the path
+            Vector3 rel = shipPosition - miningTargetPos;
+            if (currentNavState == NavState.ReturnToDock && homeDock.isSet &&
+                (rel - miningForward * Vector3.Dot(rel, miningForward)).Length() > Math.Max(JTW(), JTH())) { SetNavState(NavState.FlyToPath); return; }
             AlignToDown(jobPosition.downDir, jobPosition.forwardDir, jobPosition.leftDir, false);
             SetBlocksEnabled(workTools, enableDrillsBothWays);
             SetSortersEnabled(false);
@@ -4481,7 +4489,7 @@ String BuildSaveData()
         AppendStorage(WaypointToString(waypoints[i]), i > 0);
     // section 5 (co-op holes) was added after 1.3.1; older saves simply don't have it
     AppendStorage(";", false);
-    AppendStorage(doneHoles + "|" + myHole, false);
+    AppendStorage(doneHoles + "|" + myHole + "|" + jobToolW + "|" + jobToolH + "|" + jobSerial, false);
     // section 6 (dock pool)
     AppendStorage(";", false);
     AppendStorage(DockPoolToString(), false);
@@ -4586,6 +4594,9 @@ DataResult RestoreFrom(String data)
         lines = SafeElement(sections, 5).Split('|');
         doneHoles = SafeElement(lines, 0);
         if (!int.TryParse(SafeElement(lines, 1), out myHole)) myHole = -1;
+        if (!float.TryParse(SafeElement(lines, 2), out jobToolW)) jobToolW = 0;
+        if (!float.TryParse(SafeElement(lines, 3), out jobToolH)) jobToolH = 0;
+        if (!int.TryParse(SafeElement(lines, 4), out jobSerial)) jobSerial = 0;
         if (doneHoles.Length != jobWidth * jobHeight) { doneHoles = ""; myHole = -1; } // older save: rows, not holes
         DockPoolFromString(SafeElement(sections, 6));
     }
@@ -4655,13 +4666,15 @@ void ImportText(String data, bool jobOnly)
         int w = configWidth, h = configHeight, d = configDepth;
         StartPosition start = startPosition;
         DepthMode depth = depthMode;
-        float overlapW = widthOverlap, overlapH = heightOverlap;
+        float overlapW = widthOverlap, overlapH = heightOverlap, jtw = jobToolW, jth = jobToolH;
+        int serial = jobSerial;
         RestoreFrom(backup);
         jobPosition = job; miningForward = mineForward; miningDown = mineDown;
         configWidth = w; configHeight = h; configDepth = d;
         startPosition = start; depthMode = depth; widthOverlap = overlapW; heightOverlap = overlapH;
         jobState = JobState.Paused;
         UpdateJobConfig(true, true);
+        jobToolW = jtw; jobToolH = jth; jobSerial = serial; // the exporting ship's job: same grid and key on every ship
         jobState = JobState.Paused; lastJobState = JobState.Paused;
         statusMessage = "Imported job, run CONT";
         return;
@@ -5754,11 +5767,16 @@ int myHole = -1;              // grid cell of the hole this ship works on
 bool coopWaiting = false, coopWaitAside = false, exitRise = false;
 Vector3 coopWaitPos = new Vector3();
 
+// hole spacing of the job: the drill area it was set up with (or imported with), so a ship that
+// loses or gains a drill keeps the same grid as the other ships
+float JTW() { return jobToolW > 0 ? jobToolW : toolWidth; }
+float JTH() { return jobToolH > 0 ? jobToolH : toolHeight; }
+
 String JobKey()
 {
     if (jobState == JobState.NoJob || shipMode == ShipMode.Shuttle) return "";
     return Math.Round(jobPosition.position.X) + "|" + Math.Round(jobPosition.position.Y) + "|" + Math.Round(jobPosition.position.Z) +
-        "|" + jobWidth + "|" + jobHeight + "|" + (int)jobStartPos + "|" + Math.Round(toolWidth, 1) + "|" + Math.Round(toolHeight, 1);
+        "|" + jobWidth + "|" + jobHeight + "|" + (int)jobStartPos + "|" + Math.Round(JTW(), 1) + "|" + Math.Round(JTH(), 1) + "|" + jobSerial;
 }
 
 void UpdateTraffic()
@@ -5802,7 +5820,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio());
+        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + ";" + Me.GetId());
 }
 
 void ParseTraffic(String data)
@@ -5881,7 +5899,7 @@ bool InJobArea()
         s == NavState.ReturnToDock || s == NavState.FlyToDropPos);
 }
 
-float JobRadius() { return 0.5f * (float)Math.Sqrt(Math.Pow(jobWidth * toolWidth, 2) + Math.Pow(jobHeight * toolHeight, 2)); }
+float JobRadius() { return 0.5f * (float)Math.Sqrt(Math.Pow(jobWidth * JTW(), 2) + Math.Pow(jobHeight * JTH(), 2)); }
 
 bool NearJobArea() { return JobKey() != "" && Vector3.Distance(shipPosition, jobPosition.position) < JobRadius() + shipDiameter * 2; }
 
@@ -5969,7 +5987,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         bool sameJob = other.job != "" && other.job == JobKey();
         if (sameJob && other.jobFlag == 2) continue; // inside the rock in its own hole: can't be in anyone's way
         bool sideBySide = sameJob && other.jobFlag == 1 && InJobArea();
-        if (sideBySide) clear = Math.Min(toolWidth, toolHeight) * 0.9f;
+        if (sideBySide) clear = Math.Min(JTW(), JTH()) * 0.9f;
         float corridor = clear * (sideBySide ? 1f : 1.2f); // side by side: a ship at the next hole is outside it
         float along = haveDir ? Vector3.Dot(rel, dir) : 0;
         if (along > 0 && (rel - dir * along).Length() <= corridor)
@@ -6909,7 +6927,7 @@ const float TCC_HORIZON = 8f; //[s] how far ahead conflicts are predicted
 
 class TCShip
 {
-    public long id;
+    public long id, pb; // grid id (traffic), PB id (the controller's ship list)
     public Vector3 pos, vel, heading;
     public float dia, fw, fh, limit = -1;
     public int jobFlag; // 1 in the job area, 2 deep in its hole
@@ -6950,6 +6968,7 @@ void HandleTrafficControl(String data)
         String[] w = f[10].Split(',');
         if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); if (w.Length >= 5) s.prio = int.Parse(w[4]); }
     }
+    s.pb = f.Length >= 12 ? long.Parse(f[11]) : 0;
     s.time = DateTime.Now;
 }
 
@@ -7070,6 +7089,7 @@ bool homeCurrentDocked = false;
 TCShip FindTCShip(ShipInfo s)
 {
     TCShip best = null;
+    for (int i = 0; i < tcShips.Count; i++) if (tcShips[i].pb != 0 && "" + tcShips[i].pb == s.id) return tcShips[i];
     for (int i = 0; i < tcShips.Count; i++)
         if (Vector3.Distance(tcShips[i].pos, s.position) < 15 && (best == null ||
             Vector3.Distance(tcShips[i].pos, s.position) < Vector3.Distance(best.pos, s.position))) best = tcShips[i];
@@ -7315,6 +7335,7 @@ void UpdateDebugDraw()
 String TCName(TCShip t)
 {
     ShipInfo best = null;
+    for (int i = 0; i < connectedShips.Count; i++) if (t.pb != 0 && connectedShips[i].id == "" + t.pb) return connectedShips[i].name;
     for (int i = 0; i < connectedShips.Count; i++)
         if (Vector3.Distance(connectedShips[i].position, t.pos) < 30 && (best == null ||
             Vector3.Distance(connectedShips[i].position, t.pos) < Vector3.Distance(best.position, t.pos))) best = connectedShips[i];

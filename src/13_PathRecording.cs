@@ -138,7 +138,7 @@ Vector3 GetJobGridPosition(int col, int row, bool recalc)
     if (!recalc && gridPosCached) return cachedGridPos;
     float colOffset = ((jobWidth - 1f) / 2f) - col;
     float rowOffset = ((jobHeight - 1f) / 2f) - row;
-    cachedGridPos = jobPosition.position + jobPosition.leftDir * colOffset * toolWidth + miningDown * -1 * rowOffset * toolHeight;
+    cachedGridPos = jobPosition.position + jobPosition.leftDir * colOffset * JTW() + miningDown * -1 * rowOffset * JTH();
     gridPosCached = true;
     return cachedGridPos;
 }

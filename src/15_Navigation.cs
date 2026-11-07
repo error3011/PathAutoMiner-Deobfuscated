@@ -83,8 +83,11 @@ void UpdateNavigation()
                 if (!coopWaiting || (claimed == -2) != coopWaitAside)
                 {
                     coopWaiting = true; coopWaitAside = claimed == -2;
-                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter +
-                        jobPosition.leftDir * (jobWidth * toolWidth / 2 + shipFootWidth / 2 + shipDiameter / 2);
+                    // waiting spot: on a ring 2.5 ship sizes above the job centre, above everyone working
+                    // or passing (always clear of terrain), each ship on its own place of the ring
+                    double a = (myGridId % 6) * Math.PI / 3;
+                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter * 2.5f +
+                        (jobPosition.leftDir * (float)Math.Cos(a) + miningDown * (float)Math.Sin(a)) * shipDiameter * 1.2f;
                 }
                 SetFlightTarget(coopWaitPos, 10);
                 statusMessage = coopWaitAside ? "Waiting for a free hole" : "Waiting for the controller";
@@ -107,9 +110,11 @@ void UpdateNavigation()
                 stuckCounter = 1;
                 SetBlocksEnabled(workTools, true);
                 miningTargetPos = GetJobGridPosition(holeCol, holeRow, true);
-                // ship above the job plane (e.g. from the waiting spot): first over the hole at this
-                // height, then straight down to it
+                // over other holes (not the next one; also when arriving from the path or the waiting
+                // spot): first over the hole, at least one ship size above the job surface, then straight
+                // down to it
                 float h = Vector3.Dot(shipPosition - miningTargetPos, miningForward);
+                if ((shipPosition - miningTargetPos - miningForward * h).Length() > Math.Max(JTW(), JTH()) * 1.5f) h = Math.Min(h, -shipDiameter);
                 SetFlightTarget(h < -1 ? miningTargetPos + miningForward * h : miningTargetPos, 10);
                 AlignToDown(jobPosition.downDir, jobPosition.forwardDir, jobPosition.leftDir, false);
             }
@@ -124,13 +129,17 @@ void UpdateNavigation()
                 SetNavState(NavState.Mining);
                 return;
             }
-            // over the hole but the ground stops the way down (terrain above the job plane): start
-            // the hole where the ship is (drills are on)
-            Vector3 off = miningTargetPos - shipPosition;
-            float along = Vector3.Dot(off, miningForward);
-            if (along > 0 && (off - miningForward * along).Length() < wpReachedDist && shipSpeed < 0.3f)
+            // no progress for 5 s (not held by traffic or the cameras): over the hole, the ground is in
+            // the way down (terrain above the job surface) -> start the hole here (drills are on);
+            // elsewhere a hill is in the way -> go over it, one ship size higher, then down
+            if (shipSpeed < 0.3f && trafficSpeedLimit < 0 && !pathBlocked)
             {
-                if (++stuckCounter > 30) { cachedGridPos = shipPosition; SetNavState(NavState.Mining); }
+                if (++stuckCounter < 30) return;
+                stuckCounter = 1;
+                Vector3 off = miningTargetPos - shipPosition;
+                float along = Vector3.Dot(off, miningForward);
+                if (along > 0 && (off - miningForward * along).Length() < wpReachedDist) { cachedGridPos = shipPosition; SetNavState(NavState.Mining); }
+                else SetFlightTarget(miningTargetPos + miningForward * (Math.Min(0, -along) - shipDiameter), 10);
                 return;
             }
             stuckCounter = 1;
@@ -238,6 +247,10 @@ void UpdateNavigation()
         if (stateFirstTick)
         {
             miningTargetPos = GetJobGridPosition(holeCol, holeRow, false);
+            // heading home but not in a hole (e.g. low on energy while waiting): straight to the path
+            Vector3 rel = shipPosition - miningTargetPos;
+            if (currentNavState == NavState.ReturnToDock && homeDock.isSet &&
+                (rel - miningForward * Vector3.Dot(rel, miningForward)).Length() > Math.Max(JTW(), JTH())) { SetNavState(NavState.FlyToPath); return; }
             AlignToDown(jobPosition.downDir, jobPosition.forwardDir, jobPosition.leftDir, false);
             SetBlocksEnabled(workTools, enableDrillsBothWays);
             SetSortersEnabled(false);
