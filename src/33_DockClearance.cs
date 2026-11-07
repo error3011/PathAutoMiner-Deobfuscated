@@ -16,6 +16,7 @@ int dockRequestTick = 0;
 List<Vector3> zoneCenters = new List<Vector3>(); // the station's [PAM-Zone] sensor areas (bounding spheres)
 List<float> zoneRadii = new List<float>();
 bool dockQueued = false;  // holding outside the docking area for clearance (sent in traffic messages)
+bool outOfService = false; // can't dock (connector damaged): parked beside the path, others pass it
 bool dockHoldSet = false;
 Vector3 dockHoldPos = new Vector3();
 
@@ -74,9 +75,14 @@ void ParseStation(String data)
     for (int i = 0; i < acks.Length; i++) if (acks[i] == myGridId.ToString()) forMe = true;
     if (!forMe) return;
     stationAckTime = DateTime.Now;
-    stationCleared = long.Parse(f[2]);
-    stationClearedKind = int.Parse(f[3]);
-    stationConn = long.Parse(f[4]);
+    // cleared ships: ship:kind:connector,... (several may be on their way to different connectors)
+    stationCleared = 0; stationClearedKind = 0; stationConn = 0;
+    String[] cl = f[2].Split(',');
+    for (int i = 0; i < cl.Length; i++)
+    {
+        String[] c = cl[i].Split(':');
+        if (c.Length == 3 && c[0] == myGridId.ToString()) { stationCleared = myGridId; stationClearedKind = int.Parse(c[1]); stationConn = long.Parse(c[2]); }
+    }
     zoneCenters.Clear(); zoneRadii.Clear();
     if (f.Length >= 8 && f[7] != "")
     {
@@ -139,7 +145,20 @@ bool InDockZone(Vector3 p)
 bool HoldForDockArea(Vector3 cur, Vector3 next)
 {
     dockQueued = false;
+    outOfService = false;
     if (!trafficEnabled || shipMode == ShipMode.Shuttle || homeConnId == 0) return false;
+    // no working connector: can't dock. Don't queue or enter the docking area: stop near home, beside
+    // the path (the others pass it), and say so
+    bool broken = connectors.Count > 0;
+    for (int i = 0; i < connectors.Count; i++) if (IsBlockValid(connectors[i], true) && connectors[i].IsFunctional) broken = false;
+    if (broken && Vector3.Distance(shipPosition, homeDock.position) < dockRequestDistance)
+    {
+        if (dockRequestKind != 0) ReleaseDock();
+        if (!dockHoldSet) { dockHoldSet = true; dockHoldPos = shipPosition - leftDirection * shipDiameter * 1.5f; } // move off the lane, to the right
+        outOfService = true;
+        statusMessage = "Connector damaged: can't dock";
+        return true;
+    }
     if (dockRequestKind != 1 && Vector3.Distance(shipPosition, homeDock.position) > dockRequestDistance) return false;
     RequestDock(1);
     if (!StationHandlesMe() || StationCleared(1) || zoneCenters.Count == 0) return false;

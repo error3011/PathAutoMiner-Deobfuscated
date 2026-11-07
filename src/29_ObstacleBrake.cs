@@ -68,9 +68,12 @@ void ClearBlocked()
 
 void UpdateObstacleCheck()
 {
-    bool approach = currentNavState == NavState.ApproachDock;
+    NavState ns = currentNavState;
+    bool approach = ns == NavState.ApproachDock || ns == NavState.RetryDocking;
+    // also backing out of a hole and undocking (blocks only: the hole walls / ground don't count)
+    bool backing = ns == NavState.Returning || ns == NavState.ReturnToDock || ns == NavState.FlyToDropPos || ns == NavState.Undocking;
     if (!approach) { detourShift = new Vector3(); detourStep = 0; }
-    if (!obstacleBrake || cameras.Count == 0 || !(IsFreeFlightState(currentNavState) || approach)) { ClearBlocked(); return; }
+    if (!obstacleBrake || cameras.Count == 0 || !(IsFreeFlightState(ns) || approach || backing)) { ClearBlocked(); return; }
     Vector3 flyTarget = navTargetPos + trafficShift + detourShift;
     Vector3 toTarget = flyTarget - shipPosition;
     float targetDist = toTarget.Length();
@@ -98,9 +101,12 @@ void UpdateObstacleCheck()
         // PAM ships that send traffic messages are handled by the spacing logic, not by braking
         bool voxel = hit.Type == MyDetectedEntityType.Planet || hit.Type == MyDetectedEntityType.Asteroid;
         bool atTarget = hit.HitPosition.HasValue && Vector3D.Distance(hit.HitPosition.Value, navTargetPos) < shipDiameter;
-        bool obstacle = !hit.IsEmpty() && !ownGridIds.Contains(hit.EntityId) && !IsTrafficShip(hit.EntityId) &&
+        // PAM ships are left to the traffic logic, unless one is right in front (centre ray, closer
+        // than one ship size): then brake anyway, whatever the traffic rules say
+        bool closePam = k == 0 && hit.HitPosition.HasValue && Vector3D.Distance(hit.HitPosition.Value, shipPosition) < shipDiameter;
+        bool obstacle = !hit.IsEmpty() && !ownGridIds.Contains(hit.EntityId) && (!IsTrafficShip(hit.EntityId) || closePam) &&
             hit.Type != MyDetectedEntityType.FloatingObject && !(approach && atTarget) &&
-            !(voxel && (k > 0 || currentNavState == NavState.FlyToXY || atTarget));
+            !(voxel && (k > 0 || backing || ns == NavState.FlyToXY || atTarget));
         if (obstacle)
         {
             if (!pathBlocked) blockedSince = DateTime.Now;
@@ -112,7 +118,7 @@ void UpdateObstacleCheck()
         if (debugDraw && debugRays.Count < 16) debugRays.Add(VectorToString(cam.GetPosition()) + "," + VectorToString(end) + "," + (obstacle ? 1 : 0));
     }
     // no camera could look ahead for 2 s: say so (the ship keeps flying, as without cameras)
-    blindRuns = cast > 0 ? 0 : blindRuns + 1;
+    blindRuns = cast > 0 || backing ? 0 : blindRuns + 1; // backing out: usually no camera that way, fine
     if (blindRuns > 12) statusMessage = "Cameras can't see ahead";
 
     double blockedFor = (DateTime.Now - blockedSince).TotalSeconds;

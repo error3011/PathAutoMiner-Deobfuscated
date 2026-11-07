@@ -2,7 +2,9 @@
 // The controller PB on the station runs the docking area: it reads the real status of the
 // station's connectors (catches idle PAM ships and non-PAM ships), watches the docking area with
 // [PAM-Zone] sensors and each connector's approach lane with a [PAM-Lane] camera, and clears one
-// ship at a time to move in the area. Undocking is cleared before docking, so a full dock area
+// ship at a time to move in the area. Once that ship is on its last leg to its connector
+// (approach, align, docking) it keeps its clearance and the next ship may come in, to another
+// connector. Undocking is cleared before docking (when no ship is docking), so a full dock area
 // can't jam. A station only answers ships whose home connector is on its own grid.
 
 const String DOCK_TAG = "[PAMDCK]";
@@ -26,6 +28,7 @@ List<MyDetectedEntityInfo> zoneSeen = new List<MyDetectedEntityInfo>();
 long clearedShip = 0;
 int clearedKind = 0;
 long clearedConn = 0;
+List<long> dockingShips = new List<long>(), dockingConns = new List<long>(); // cleared, on the last leg
 DateTime clearedSince = DateTime.Now;
 String dockAreaStatus = "";
 int dockSendTick = 0;
@@ -81,7 +84,7 @@ bool IsZoneBusy()
         {
             MyDetectedEntityInfo e = zoneSeen[i];
             bool grid = e.Type == MyDetectedEntityType.SmallGrid || e.Type == MyDetectedEntityType.LargeGrid;
-            if (grid && e.EntityId != clearedShip && e.Velocity.Length() > 0.5f)
+            if (grid && e.EntityId != clearedShip && !dockingShips.Contains(e.EntityId) && e.Velocity.Length() > 0.5f)
             { dockAreaStatus = "Ship moving in dock area: " + e.Name; return true; }
         }
     }
@@ -91,14 +94,14 @@ bool IsZoneBusy()
 long PickDock(DockRequest r)
 {
     IMyShipConnector home = StationConnector(r.home);
-    if (IsDockFree(home) && IsLaneClear(home, r.ship)) return home.EntityId;
+    if (IsDockFree(home) && !DockTaken(home.EntityId) && IsLaneClear(home, r.ship)) return home.EntityId;
     if (!r.canUsePool || home == null) return 0; // home removed: the pool poses are relative to it
     IMyShipConnector best = null;
     double bestDist = 0;
     for (int i = 0; i < stationDocks.Count; i++)
     {
         IMyShipConnector c = stationDocks[i];
-        if (!IsDockFree(c)) continue;
+        if (!IsDockFree(c) || DockTaken(c.EntityId)) continue;
         double d = Vector3D.Distance(c.GetPosition(), home.GetPosition());
         if (best == null || d < bestDist) { if (IsLaneClear(c, r.ship)) { best = c; bestDist = d; } }
     }
@@ -115,7 +118,7 @@ void GrantNext()
         for (int i = 0; i < dockRequests.Count; i++)
         {
             DockRequest r = dockRequests[i];
-            if (r.kind != pass) continue;
+            if (r.kind != pass || dockingShips.Contains(r.ship) || (pass == 2 && dockingShips.Count > 0)) continue; // undock once nobody is docking
             if (pass == 1)
             {
                 long c = PickDock(r);
@@ -159,6 +162,8 @@ void HandleDockMessage(String data)
         {
             for (int i = dockRequests.Count - 1; i >= 0; i--) if (dockRequests[i].ship == ship) dockRequests.RemoveAt(i);
             if (clearedShip == ship) clearedShip = 0;
+            int d = dockingShips.IndexOf(ship);
+            if (d >= 0) { dockingShips.RemoveAt(d); dockingConns.RemoveAt(d); }
         }
         else if (f[0] == "R" && f.Length >= 5)
         {
@@ -184,13 +189,27 @@ void RunDockControl()
     if (clearedShip != 0 && cleared == null) clearedShip = 0;
     if (cleared != null && (DateTime.Now - clearedSince).TotalSeconds > CLEARANCE_TIMEOUT)
     { clearedShip = 0; cleared.first = DateTime.Now; } // too slow: back of the queue
+    // ships on their last leg that stopped asking (docked, or gave up): done
+    for (int i = dockingShips.Count - 1; i >= 0; i--)
+    {
+        bool asking = false;
+        for (int k = 0; k < dockRequests.Count; k++) if (dockRequests[k].ship == dockingShips[i]) asking = true;
+        if (!asking) { dockingShips.RemoveAt(i); dockingConns.RemoveAt(i); }
+    }
+    // the cleared ship is on its last leg to its connector: it keeps the clearance, the next may come
+    if (clearedShip != 0 && clearedKind == 1)
+        for (int i = 0; i < tcShips.Count; i++)
+            if (tcShips[i].id == clearedShip && tcShips[i].phase >= 2) { dockingShips.Add(clearedShip); dockingConns.Add(clearedConn); clearedShip = 0; break; }
     dockAreaStatus = "";
     if (clearedShip == 0 && dockRequests.Count > 0 && !IsZoneBusy()) GrantNext();
 }
 
 String BuildStationMessage()
 {
-    String msg = "S;" + stationGrid.EntityId + ";" + clearedShip + ";" + clearedKind + ";" + clearedConn + ";";
+    // cleared ships: ship:kind:connector,...
+    String msg = "S;" + stationGrid.EntityId + ";" + (clearedShip != 0 ? clearedShip + ":" + clearedKind + ":" + clearedConn : "");
+    for (int i = 0; i < dockingShips.Count; i++) msg += (msg.EndsWith(";") ? "" : ",") + dockingShips[i] + ":1:" + dockingConns[i];
+    msg += ";;;";
     for (int i = 0; i < dockRequests.Count; i++) msg += (i > 0 ? "," : "") + dockRequests[i].ship;
     msg += ";";
     for (int i = 0; i < stationDocks.Count; i++)
@@ -215,6 +234,10 @@ String GetDockAreaLine()
     if (stationDocks.Count == 0 && zoneSensors.Count == 0) return "";
     int free = 0;
     for (int i = 0; i < stationDocks.Count; i++) if (IsDockFree(stationDocks[i])) free++;
-    return "Docks: " + free + "/" + stationDocks.Count + " free" + (clearedShip != 0 ? (clearedKind == 1 ? " | docking" : " | undocking") : "") +
+    return "Docks: " + free + "/" + stationDocks.Count + " free" + (clearedShip != 0 ? (clearedKind == 1 ? " | coming in" : " | undocking") : "") +
+        (dockingShips.Count > 0 ? " | docking: " + dockingShips.Count : "") +
         (dockRequests.Count > 1 ? " | " + (dockRequests.Count - 1) + " waiting" : "") + (dockAreaStatus != "" ? "\n" + dockAreaStatus : "") + "\n";
 }
+
+// connector already given to a cleared ship that hasn't connected yet
+bool DockTaken(long conn) { return (clearedShip != 0 && clearedConn == conn) || dockingConns.Contains(conn); }

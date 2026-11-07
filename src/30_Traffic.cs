@@ -21,6 +21,7 @@ class TrafficShip
     public String job = "";
     public int hole = -1;  // co-op: grid cell it claims
     public bool queued;    // holding outside the docking area for station clearance
+    public bool parked;    // out of service (can't dock), parked beside the path: pass it
     public int jobFlag;    // 1: working in the job area, aligned to it; 2: deep in its hole (inside the rock)
     public int prio;       // right of way at the job site (TrafficPrio)
     public float metric = -1; // distance to its next checkpoint (-1 unknown)
@@ -99,7 +100,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + "," + Math.Round(Vector3.Distance(shipPosition, navTargetPos)) + ";" + Me.GetId());
+        ";" + (dockQueued ? 1 : outOfService ? 2 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + "," + Math.Round(Vector3.Distance(shipPosition, navTargetPos)) + ";" + Me.GetId());
 }
 
 void ParseTraffic(String data)
@@ -129,6 +130,7 @@ void ParseTraffic(String data)
         }
         ship.heading = f.Length >= 9 ? StringToVector(f[8]) : new Vector3();
         ship.queued = f.Length >= 10 && f[9] == "1";
+        ship.parked = f.Length >= 10 && f[9] == "2";
         ship.jobFlag = 0; ship.prio = 0;
         if (f.Length >= 11)
         {
@@ -287,6 +289,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             bool headOn = otherAlong < -1f || (hasHeading && Vector3.Dot(other.heading, dir) < -0.5f);
             // a ship with right of way (leaving the job site before ships moving between holes or
             // arriving): give way, don't pass it
+            if (!precise && other.parked) { trafficShift = right * clear * 1.3f; continue; } // out of service: pass it
             if (!precise && other.prio <= myPrio) // docking, undocking, in a hole: no side step, hold for every ship in the way
             {
                 if (other.queued)
@@ -332,18 +335,23 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         if (other.prio > myPrio || (other.prio == myPrio && !GoesFirst(targetDist, other)) || t < 2f) { trafficSpeedLimit = 0; limiter = other; cpaHold = true; }
     }
 
-    // giving way to a ship that is coming through where I am: move slowly out of its way, sideways
-    // from its line (only in free flight; the camera brake stops it if there's no room there)
+    // giving way: a ship with right of way that is coming through where I am (or wants to: its
+    // direction when stopped) -> move slowly out of its line, sideways (only in free flight; the
+    // camera brake stops the ship if there's no room there)
     sidestep = false;
-    if (!precise && !cpaHold && limiter != null && trafficSpeedLimit < 0.5f && shipSpeed < 1 && limiter.vel.Length() > 1)
-    {
-        Vector3 od = Vector3.Normalize(limiter.vel);
-        Vector3 rel = shipPosition - limiter.pos;
-        float along = Vector3.Dot(rel, od);
-        Vector3 lat = rel - od * along;
-        float clear = (shipDiameter + limiter.diameter) * 0.6f;
-        if (along > 0 && lat.Length() < clear)
+    if (!precise && !cpaHold && shipSpeed < 2)
+        for (int i = 0; i < traffic.Count; i++)
         {
+            TrafficShip o = traffic[i];
+            if (o.parked || o.jobFlag == 2 || !(o.prio > myPrio || (o.prio == myPrio && !GoesFirst(targetDist, o)))) continue;
+            Vector3 oi = o.vel.LengthSquared() > 1 ? o.vel : o.heading;
+            if (oi.LengthSquared() < 0.25f) continue;
+            Vector3 od = Vector3.Normalize(oi);
+            Vector3 rel = shipPosition - o.pos;
+            float along = Vector3.Dot(rel, od);
+            Vector3 lat = rel - od * along;
+            float clear = (shipDiameter + o.diameter) * 0.6f;
+            if (along <= 0 || along > clear * 4 || lat.Length() >= clear) continue;
             Vector3 away = lat.Length() > 0.5f ? Vector3.Normalize(lat) : Vector3.Normalize(Vector3.Cross(od, up));
             trafficShift = shipPosition + away * clear - navTargetPos; // fly to the point beside its line
             trafficSpeedLimit = 2;
@@ -351,7 +359,6 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             statusMessage = "Traffic: moving aside";
             return;
         }
-    }
 
     // safety net: held by traffic for too long -> stop waiting for a while and pass on the right
     // (not while docking or in a hole, and not in the queue outside the docking area)

@@ -124,8 +124,8 @@ void ComputeTrafficControl()
 
 long TCYielder(TCShip a, TCShip b, Vector3 ua, Vector3 ub, Vector3 rel, float dist)
 {
-    if (a.id == clearedShip) return b.id; // cleared to dock by this station
-    if (b.id == clearedShip) return a.id;
+    if (a.id == clearedShip || dockingShips.Contains(a.id)) return b.id; // cleared to dock by this station
+    if (b.id == clearedShip || dockingShips.Contains(b.id)) return a.id;
     if (a.prio != b.prio) return a.prio < b.prio ? a.id : b.id; // ships leaving the job site go first
     Vector3 n = dist > 0.01f ? rel / dist : new Vector3(1, 0, 0);
     float ta = Vector3.Dot(ua, n), tb = Vector3.Dot(ub, -n); // speed towards the other ship

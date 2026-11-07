@@ -368,7 +368,7 @@ void UpdateNavigation()
         if (currentNavState == NavState.FlyToDockArea && shipMode != ShipMode.Shuttle && !stateFirstTick && StationCleared(1) && ApplyStationDock())
         { SetNavState(NavState.FlyToDockArea); return; }
 
-        // station dock control: wait outside the docking area until cleared, turned towards the dock
+        // station dock control: wait outside the docking area until cleared (facing the way it flew in)
         bool inDockZone = false;
         if (currentNavState == NavState.FlyToDockArea && !stateFirstTick && pathWaypointIndex >= 0 && pathWaypointIndex < waypoints.Count)
         {
@@ -378,9 +378,8 @@ void UpdateNavigation()
             if (HoldForDockArea(cur, next))
             {
                 if (!dockHoldSet) { dockHoldSet = true; dockHoldPos = InDockZone(cur) ? shipPosition : cur; }
-                SetFlightTarget(dockHoldPos, 0);
-                AlignToDown(pathFollowData.target.downDir, pathFollowData.target.forwardDir, pathFollowData.target.leftDir, false);
-                statusMessage = "Waiting for dock clearance";
+                SetFlightTarget(dockHoldPos, 0); // keeps facing the way it flew in; turns to the dock once cleared
+                if (!outOfService) statusMessage = "Waiting for dock clearance";
                 return;
             }
             dockHoldSet = false;
