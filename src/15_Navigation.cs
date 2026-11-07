@@ -88,8 +88,11 @@ void UpdateNavigation()
             if (result == SpiralResult.AllDone)
             {
                 jobState = JobState.Done;
-                statusMessage = "Job done";
-                if (whenDoneReturnHome && homeDock.isSet) { SetNavState(NavState.FlyToPath); SetStopAtState(NavState.Unloading); lastJobState = JobState.MoveHome; }
+                // co-op: holes are left, but all of them are taken by other ships (or too close to them):
+                // leave the job area instead of hovering in the other ships' way
+                bool othersWorking = doneHoles.IndexOf('0') >= 0;
+                statusMessage = othersWorking ? "No free hole left for this ship" : "Job done";
+                if ((whenDoneReturnHome || othersWorking) && homeDock.isSet) { SetNavState(NavState.FlyToPath); SetStopAtState(NavState.Unloading); lastJobState = JobState.MoveHome; }
                 else { SetNavState(NavState.FlyToJobPos); SetStopAtState(NavState.AlignJob); lastJobState = JobState.MoveToJob; }
                 return;
             }

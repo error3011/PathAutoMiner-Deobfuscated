@@ -64,7 +64,15 @@ void AssignJobHoles(JobRec job)
 String BuildJobMessage(JobRec job)
 {
     String msg = "J;" + job.key + ";" + job.done + ";";
-    for (int i = 0; i < job.ships.Count; i++) msg += (i > 0 ? "," : "") + job.ships[i].id + ":" + job.ships[i].cell;
+    // only ships heard just now: a ship missing from the list knows the controller can't hear it
+    // (it may still hear the controller) and picks its holes itself instead of waiting
+    bool first = true;
+    for (int i = 0; i < job.ships.Count; i++)
+    {
+        if ((DateTime.Now - job.ships[i].seen).TotalSeconds > 5) continue;
+        msg += (first ? "" : ",") + job.ships[i].id + ":" + job.ships[i].cell;
+        first = false;
+    }
     return msg;
 }
 

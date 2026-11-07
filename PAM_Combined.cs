@@ -2226,8 +2226,11 @@ void UpdateNavigation()
             if (result == SpiralResult.AllDone)
             {
                 jobState = JobState.Done;
-                statusMessage = "Job done";
-                if (whenDoneReturnHome && homeDock.isSet) { SetNavState(NavState.FlyToPath); SetStopAtState(NavState.Unloading); lastJobState = JobState.MoveHome; }
+                // co-op: holes are left, but all of them are taken by other ships (or too close to them):
+                // leave the job area instead of hovering in the other ships' way
+                bool othersWorking = doneHoles.IndexOf('0') >= 0;
+                statusMessage = othersWorking ? "No free hole left for this ship" : "Job done";
+                if ((whenDoneReturnHome || othersWorking) && homeDock.isSet) { SetNavState(NavState.FlyToPath); SetStopAtState(NavState.Unloading); lastJobState = JobState.MoveHome; }
                 else { SetNavState(NavState.FlyToJobPos); SetStopAtState(NavState.AlignJob); lastJobState = JobState.MoveToJob; }
                 return;
             }
@@ -5679,9 +5682,8 @@ void UpdateTraffic()
         if (data != null) try { ParseJobState(data); } catch { }
     }
 
-    // idle ships send too while docked, so their connector counts as taken
+    // idle ships send too: docked (their connector counts as taken) or hovering (an obstacle)
     if (++trafficTick < 3) return; // ~2 messages per second
-    if (currentNavState == NavState.Idle && FindConnector(MyShipConnectorStatus.Connected) == null) return;
     trafficTick = 0;
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
@@ -5781,6 +5783,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
     Vector3 right = Vector3.Cross(dir, up);
     right = right.LengthSquared() < 0.0001f ? -leftDirection : Vector3.Normalize(right);
     TrafficShip limiter = null;
+    bool goingHome = currentNavState == NavState.FlyToDockArea && !StationCleared(1); // lines up in the dock queue
 
     for (int i = 0; i < traffic.Count; i++)
     {
@@ -5802,11 +5805,13 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             }
             else
             {
-                if (other.queued && !dockQueued)
+                if (other.queued)
                 {
-                    // a ship waiting outside the docking area: pass it (when queueing too, line up behind it)
-                    trafficShift = right * clear * 1.3f;
-                    continue;
+                    // a ship waiting outside the docking area: leaving or cleared ships pass it on the right
+                    if (!goingHome) { trafficShift = right * clear * 1.3f; continue; }
+                    // both queueing: the one closer to the waiting point is ahead (tie: lower id)
+                    float mine = Vector3.Distance(shipPosition, navTargetPos), its = Vector3.Distance(pos, navTargetPos);
+                    if (mine < its || (mine == its && myGridId < other.id)) continue;
                 }
                 if (headOn)
                 {
@@ -5846,7 +5851,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
     // safety net: held by traffic for too long -> stop waiting for a while and pass on the right
     // (not while docking or in a hole, and not in the queue outside the docking area)
     bool held = trafficSpeedLimit >= 0 && trafficSpeedLimit < 0.5f;
-    if (!held || precise || (limiter != null && limiter.queued && dockQueued)) { trafficHolding = false; return; }
+    if (!held || precise || (limiter != null && limiter.queued && goingHome)) { trafficHolding = false; return; }
     if (!trafficHolding) { trafficHolding = true; trafficHoldSince = DateTime.Now; }
     double heldFor = (DateTime.Now - trafficHoldSince).TotalSeconds;
     if (heldFor > TRAFFIC_STUCK_TIME + TRAFFIC_ESCAPE_TIME) trafficHoldSince = DateTime.Now;
@@ -5991,7 +5996,8 @@ DateTime coordWaitSince = DateTime.Now;
 int coordCell = -1; // -1 none assigned (yet), -2 nothing left for this ship
 bool holeWanted = false;
 
-bool JobCoordinated() { return trafficEnabled && (DateTime.Now - coordTime).TotalSeconds < 3; }
+// coordCell -3: the controller's job state doesn't list this ship (it can't hear it): peer rules
+bool JobCoordinated() { return trafficEnabled && coordCell != -3 && (DateTime.Now - coordTime).TotalSeconds < 3; }
 
 void ParseJobState(String data)
 {
@@ -5999,7 +6005,7 @@ void ParseJobState(String data)
     if (f.Length < 4 || f[0] != "J" || f[1] == "" || f[1] != JobKey()) return;
     coordTime = DateTime.Now;
     MergeDoneHoles(f[2]);
-    coordCell = -1;
+    coordCell = -3;
     String me = myGridId + ":";
     String[] e = f[3].Split(',');
     for (int i = 0; i < e.Length; i++) if (e[i].StartsWith(me)) coordCell = int.Parse(e[i].Substring(me.Length));
@@ -6625,7 +6631,15 @@ void AssignJobHoles(JobRec job)
 String BuildJobMessage(JobRec job)
 {
     String msg = "J;" + job.key + ";" + job.done + ";";
-    for (int i = 0; i < job.ships.Count; i++) msg += (i > 0 ? "," : "") + job.ships[i].id + ":" + job.ships[i].cell;
+    // only ships heard just now: a ship missing from the list knows the controller can't hear it
+    // (it may still hear the controller) and picks its holes itself instead of waiting
+    bool first = true;
+    for (int i = 0; i < job.ships.Count; i++)
+    {
+        if ((DateTime.Now - job.ships[i].seen).TotalSeconds > 5) continue;
+        msg += (first ? "" : ",") + job.ships[i].id + ":" + job.ships[i].cell;
+        first = false;
+    }
     return msg;
 }
 
