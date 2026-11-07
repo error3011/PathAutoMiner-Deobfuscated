@@ -21,6 +21,8 @@ class TrafficShip
     public String job = "";
     public int hole = -1;  // co-op: grid cell it claims
     public bool queued;    // holding outside the docking area for station clearance
+    public bool inJob;     // working in the job area (moving between holes, mining, backing out): aligned to the job
+    public float fw, fh;   // its size across the drill face
     public long dock = 0;  // dock pool: connector this ship uses or heads for
     public int dockPhase = 0;
     public DateTime time;
@@ -76,7 +78,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight);
+        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + (InJobArea() ? 1 : 0));
 }
 
 void ParseTraffic(String data)
@@ -106,6 +108,12 @@ void ParseTraffic(String data)
         }
         ship.heading = f.Length >= 9 ? StringToVector(f[8]) : new Vector3();
         ship.queued = f.Length >= 10 && f[9] == "1";
+        ship.inJob = false;
+        if (f.Length >= 11)
+        {
+            String[] w = f[10].Split(',');
+            if (w.Length >= 4) { ship.fw = float.Parse(w[1]); ship.fh = float.Parse(w[2]); ship.inJob = w[3] == "1"; }
+        }
     }
     catch { } // malformed message from another script: ignore
 }
@@ -141,6 +149,11 @@ Vector3 trafficMyVel = new Vector3();
 
 // Docking, undocking and backing out of a hole: traffic only slows/holds the ship, no side step
 // (the ship has to stay on its line to the connector or hole).
+bool InJobArea()
+{
+    return jobState == JobState.Active && (currentNavState == NavState.FlyToXY || currentNavState == NavState.Mining || currentNavState == NavState.Returning);
+}
+
 bool IsPreciseFlightState(NavState s)
 {
     return s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.Docking || s == NavState.RetryDocking ||
@@ -180,6 +193,10 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         Vector3 pos = other.pos + other.vel * (float)(DateTime.Now - other.time).TotalSeconds;
         Vector3 rel = pos - shipPosition;
         float clear = (shipDiameter + other.diameter) * 0.5f;
+        // two ships working the same job are both aligned to it, side by side: their real size across
+        // the drill face counts, not the bounding sphere (that made ships at nearby holes block each other)
+        bool sideBySide = other.inJob && InJobArea() && other.fw > 0 && shipFootWidth > 0 && other.job == JobKey();
+        if (sideBySide) clear = Math.Max(shipFootWidth + other.fw, shipFootHeight + other.fh) * 0.5f;
         float along = haveDir ? Vector3.Dot(rel, dir) : 0;
         if (along > 0 && (rel - dir * along).Length() <= clear * 1.2f)
         {
@@ -218,7 +235,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
                 }
             }
             // same direction, or a ship that isn't moving on its own: follow at a distance, hold if it stops
-            float gap = along - clear - followGap * shipDiameter;
+            float gap = along - clear - (sideBySide ? 1f : followGap * shipDiameter);
             float limit = Math.Max(0, otherAlong) + Math.Max(0, gap) / FOLLOW_TIME;
             if (headOn) limit = Math.Max(0, gap + Math.Min(0, otherAlong) * FOLLOW_TIME * 2) / FOLLOW_TIME; // it comes towards me: stop early
             if (trafficSpeedLimit < 0 || limit < trafficSpeedLimit) { trafficSpeedLimit = limit; limiter = other; }
