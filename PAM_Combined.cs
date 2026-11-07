@@ -2615,6 +2615,8 @@ void UpdateNavigation()
         }
         if (FindConnector(MyShipConnectorStatus.Connectable) != null || FindConnector(MyShipConnectorStatus.Connected) != null)
         { SetNavState(NavState.Docking); return; }
+        // reached the point beside the obstacle: from here straight to the connector again
+        if (detourShift.LengthSquared() > 0 && distToTarget < wpReachedDist && distToTarget != -1) { detourShift = new Vector3(); return; }
         if (distToTarget < wpReachedDist / 2 && distToTarget != -1)
         { SetNavState(NavState.AlignDock); return; }
     }
@@ -3479,7 +3481,7 @@ bool MeasureItemVolume(IMyInventory source, int idx, IMyInventory dest, out floa
 
 void UpdateFlight()
 {
-    Vector3 flyTarget = navTargetPos + trafficShift; // traffic: keep right of an oncoming PAM ship
+    Vector3 flyTarget = navTargetPos + trafficShift + detourShift; // traffic: keep right of an oncoming PAM ship; docking: way around an obstacle
     Vector3 toTarget = flyTarget - shipPosition;
     if (toTarget.Length() == 0) toTarget = new Vector3(0, 0, -1);
     Vector3 localTarget = LocalTransformDirection(remoteControl, toTarget);
@@ -5598,6 +5600,10 @@ string FormatVector(Vector3 v) { return "X" + FormatFloat(v.X) + "Y" + FormatFlo
 // The edge rays look for blocks only: terrain is the centre ray's job (paths may run low).
 // The sweep follows where the ship is actually going (its velocity, once it moves), and each ray
 // is cast by the camera that faces that point best (with charge left).
+// Also on the way from the path end to the connector (ApproachDock), where anything right at the
+// approach point (the station around the connector) doesn't count. Blocked there for 4 s, the
+// ship tries to go around: one ship size up, right, left, down from the straight line, one after
+// the other; if none works it stays where it is ("Docking blocked").
 // Active only for free flight: path flights and hole-to-hole moves. Off while mining, backing
 // out of a hole and docking, where the ship is meant to be close to voxels and blocks. Terrain
 // (planet/asteroid) doesn't count between holes (the drills are on and the hole tops sit on the
@@ -5611,7 +5617,9 @@ const int SCAN_PATTERN = 16;
 int cameraIndex = 0;
 DateTime blockedSince = DateTime.Now;
 String blockedBy = "";
-String cameraCoverage = ""; // ship directions some camera can scan (info page)
+String cameraCoverage = "";
+Vector3 detourShift = new Vector3(); // docking approach: way around an obstacle
+int detourStep = 0; // ship directions some camera can scan (info page)
 
 void ScanCameras()
 {
@@ -5652,8 +5660,10 @@ void ClearBlocked()
 
 void UpdateObstacleCheck()
 {
-    if (!obstacleBrake || cameras.Count == 0 || !IsFreeFlightState(currentNavState)) { ClearBlocked(); return; }
-    Vector3 flyTarget = navTargetPos + trafficShift;
+    bool approach = currentNavState == NavState.ApproachDock;
+    if (!approach) { detourShift = new Vector3(); detourStep = 0; }
+    if (!obstacleBrake || cameras.Count == 0 || !(IsFreeFlightState(currentNavState) || approach)) { ClearBlocked(); return; }
+    Vector3 flyTarget = navTargetPos + trafficShift + detourShift;
     Vector3 toTarget = flyTarget - shipPosition;
     float targetDist = toTarget.Length();
     if (targetDist < 1f) { ClearBlocked(); return; }
@@ -5679,9 +5689,10 @@ void UpdateObstacleCheck()
         MyDetectedEntityInfo hit = cam.Raycast(end);
         // PAM ships that send traffic messages are handled by the spacing logic, not by braking
         bool voxel = hit.Type == MyDetectedEntityType.Planet || hit.Type == MyDetectedEntityType.Asteroid;
+        bool atTarget = hit.HitPosition.HasValue && Vector3D.Distance(hit.HitPosition.Value, navTargetPos) < shipDiameter;
         bool obstacle = !hit.IsEmpty() && !ownGridIds.Contains(hit.EntityId) && !IsTrafficShip(hit.EntityId) &&
-            hit.Type != MyDetectedEntityType.FloatingObject && !(voxel && (k > 0 || currentNavState == NavState.FlyToXY ||
-            (hit.HitPosition.HasValue && Vector3D.Distance(hit.HitPosition.Value, flyTarget) < shipDiameter)));
+            hit.Type != MyDetectedEntityType.FloatingObject && !(approach && atTarget) &&
+            !(voxel && (k > 0 || currentNavState == NavState.FlyToXY || atTarget));
         if (obstacle)
         {
             if (!pathBlocked) blockedSince = DateTime.Now;
@@ -5696,7 +5707,22 @@ void UpdateObstacleCheck()
     blindRuns = cast > 0 ? 0 : blindRuns + 1;
     if (blindRuns > 12) statusMessage = "Cameras can't see ahead";
 
-    if (pathBlocked && (DateTime.Now - blockedSince).TotalSeconds > obstacleTimeout)
+    double blockedFor = (DateTime.Now - blockedSince).TotalSeconds;
+    if (approach && pathBlocked && blockedFor > 4)
+    {
+        if (detourStep < 4)
+        {
+            // try the next way around: up, right, left, down from the straight line to the connector
+            detourStep++;
+            detourShift = (detourStep == 1 ? up : detourStep == 2 ? side : detourStep == 3 ? -side : -up) * shipDiameter;
+            blockedSince = DateTime.Now;
+            ClearBlocked();
+            statusMessage = "Docking: going around an obstacle";
+        }
+        else statusMessage = "Docking blocked: " + blockedBy + ", stopped";
+        return;
+    }
+    if (pathBlocked && blockedFor > obstacleTimeout)
         statusMessage = "Path blocked: " + blockedBy;
 }
 
@@ -5745,6 +5771,7 @@ class TrafficShip
     public bool queued;    // holding outside the docking area for station clearance
     public int jobFlag;    // 1: working in the job area, aligned to it; 2: deep in its hole (inside the rock)
     public int prio;       // right of way at the job site (TrafficPrio)
+    public float metric = -1; // distance to its next checkpoint (-1 unknown)
     public float fw, fh;   // its size across the drill face
     public long dock = 0;  // dock pool: connector this ship uses or heads for
     public int dockPhase = 0;
@@ -5820,7 +5847,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + ";" + Me.GetId());
+        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + "," + Math.Round(Vector3.Distance(shipPosition, navTargetPos)) + ";" + Me.GetId());
 }
 
 void ParseTraffic(String data)
@@ -5854,7 +5881,7 @@ void ParseTraffic(String data)
         if (f.Length >= 11)
         {
             String[] w = f[10].Split(',');
-            if (w.Length >= 4) { ship.fw = float.Parse(w[1]); ship.fh = float.Parse(w[2]); ship.jobFlag = int.Parse(w[3]); if (w.Length >= 5) ship.prio = int.Parse(w[4]); }
+            if (w.Length >= 4) { ship.fw = float.Parse(w[1]); ship.fh = float.Parse(w[2]); ship.jobFlag = int.Parse(w[3]); if (w.Length >= 5) ship.prio = int.Parse(w[4]); ship.metric = w.Length >= 6 ? float.Parse(w[5]) : -1; }
         }
     }
     catch { } // malformed message from another script: ignore
@@ -5908,7 +5935,15 @@ int TrafficPrio()
 {
     NavState s = currentNavState;
     if (s == NavState.ReturnToDock || s == NavState.FlyToPath || (s == NavState.FlyToDockArea && NearJobArea())) return 2;
-    return s == NavState.FlyToXY || s == NavState.Returning || s == NavState.FlyToDropPos || s == NavState.FlyToJobArea ? 1 : 0;
+    return s == NavState.FlyToXY || s == NavState.Returning || s == NavState.FlyToDropPos || (s == NavState.FlyToJobArea && NearJobArea()) ? 1 : 0;
+}
+
+// between ships with the same right of way: the one closer to its next checkpoint goes first (the
+// next path waypoint, or the path waypoint it flies to when it isn't on the path yet); equal: lower id
+bool GoesFirst(float myDist, TrafficShip o)
+{
+    if (o.metric < 0 || Math.Abs(myDist - o.metric) <= 2) return myGridId < o.id;
+    return myDist < o.metric;
 }
 
 // 0: not working the job; 1: in the job area, aligned to it; 2: deeper in its hole than half its size
@@ -6014,7 +6049,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
                     if (along < (shipSpeed - otherAlong) * 6f + clear * 4f) trafficShift = right * clear * 1.3f;
                     continue;
                 }
-                if (hasHeading && myGridId < other.id)
+                if (hasHeading && GoesFirst(targetDist, other))
                 {
                     // does the other ship have me ahead in its corridor too (crossing paths)? then one
                     // of us has to go: the lower id goes, keeping right, the other one waits
@@ -6040,7 +6075,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         if (rv2 < 0.25f) continue;
         float t = -Vector3.Dot(rel, rv) / rv2;
         if (t <= 0 || t > 5f || (rel + rv * t).Length() >= (sideBySide ? clear : clear * 1.1f)) continue;
-        if (other.prio > myPrio || (other.prio == myPrio && myGridId > other.id) || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
+        if (other.prio > myPrio || (other.prio == myPrio && !GoesFirst(targetDist, other)) || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
     }
 
     // safety net: held by traffic for too long -> stop waiting for a while and pass on the right
@@ -6932,6 +6967,7 @@ class TCShip
     public float dia, fw, fh, limit = -1;
     public int jobFlag; // 1 in the job area, 2 deep in its hole
     public int prio;    // right of way: 2 leaving the job site, 1 moving between holes / arriving
+    public float metric = -1; // distance to its next checkpoint
     public String job = "";
     public int phase;
     public DateTime time;
@@ -6966,7 +7002,7 @@ void HandleTrafficControl(String data)
     if (f.Length >= 11)
     {
         String[] w = f[10].Split(',');
-        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); if (w.Length >= 5) s.prio = int.Parse(w[4]); }
+        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); if (w.Length >= 5) s.prio = int.Parse(w[4]); s.metric = w.Length >= 6 ? float.Parse(w[5]) : -1; }
     }
     s.pb = f.Length >= 12 ? long.Parse(f[11]) : 0;
     s.time = DateTime.Now;
@@ -7044,6 +7080,8 @@ long TCYielder(TCShip a, TCShip b, Vector3 ua, Vector3 ub, Vector3 rel, float di
     float ta = Vector3.Dot(ua, n), tb = Vector3.Dot(ub, -n); // speed towards the other ship
     if (ta - tb > 1) return a.id;
     if (tb - ta > 1) return b.id;
+    // the one closer to its next checkpoint goes first
+    if (a.metric >= 0 && b.metric >= 0 && Math.Abs(a.metric - b.metric) > 2) return a.metric > b.metric ? a.id : b.id;
     return a.id > b.id ? a.id : b.id;
 }
 

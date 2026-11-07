@@ -8,6 +8,10 @@
 // The edge rays look for blocks only: terrain is the centre ray's job (paths may run low).
 // The sweep follows where the ship is actually going (its velocity, once it moves), and each ray
 // is cast by the camera that faces that point best (with charge left).
+// Also on the way from the path end to the connector (ApproachDock), where anything right at the
+// approach point (the station around the connector) doesn't count. Blocked there for 4 s, the
+// ship tries to go around: one ship size up, right, left, down from the straight line, one after
+// the other; if none works it stays where it is ("Docking blocked").
 // Active only for free flight: path flights and hole-to-hole moves. Off while mining, backing
 // out of a hole and docking, where the ship is meant to be close to voxels and blocks. Terrain
 // (planet/asteroid) doesn't count between holes (the drills are on and the hole tops sit on the
@@ -21,7 +25,9 @@ const int SCAN_PATTERN = 16;
 int cameraIndex = 0;
 DateTime blockedSince = DateTime.Now;
 String blockedBy = "";
-String cameraCoverage = ""; // ship directions some camera can scan (info page)
+String cameraCoverage = "";
+Vector3 detourShift = new Vector3(); // docking approach: way around an obstacle
+int detourStep = 0; // ship directions some camera can scan (info page)
 
 void ScanCameras()
 {
@@ -62,8 +68,10 @@ void ClearBlocked()
 
 void UpdateObstacleCheck()
 {
-    if (!obstacleBrake || cameras.Count == 0 || !IsFreeFlightState(currentNavState)) { ClearBlocked(); return; }
-    Vector3 flyTarget = navTargetPos + trafficShift;
+    bool approach = currentNavState == NavState.ApproachDock;
+    if (!approach) { detourShift = new Vector3(); detourStep = 0; }
+    if (!obstacleBrake || cameras.Count == 0 || !(IsFreeFlightState(currentNavState) || approach)) { ClearBlocked(); return; }
+    Vector3 flyTarget = navTargetPos + trafficShift + detourShift;
     Vector3 toTarget = flyTarget - shipPosition;
     float targetDist = toTarget.Length();
     if (targetDist < 1f) { ClearBlocked(); return; }
@@ -89,9 +97,10 @@ void UpdateObstacleCheck()
         MyDetectedEntityInfo hit = cam.Raycast(end);
         // PAM ships that send traffic messages are handled by the spacing logic, not by braking
         bool voxel = hit.Type == MyDetectedEntityType.Planet || hit.Type == MyDetectedEntityType.Asteroid;
+        bool atTarget = hit.HitPosition.HasValue && Vector3D.Distance(hit.HitPosition.Value, navTargetPos) < shipDiameter;
         bool obstacle = !hit.IsEmpty() && !ownGridIds.Contains(hit.EntityId) && !IsTrafficShip(hit.EntityId) &&
-            hit.Type != MyDetectedEntityType.FloatingObject && !(voxel && (k > 0 || currentNavState == NavState.FlyToXY ||
-            (hit.HitPosition.HasValue && Vector3D.Distance(hit.HitPosition.Value, flyTarget) < shipDiameter)));
+            hit.Type != MyDetectedEntityType.FloatingObject && !(approach && atTarget) &&
+            !(voxel && (k > 0 || currentNavState == NavState.FlyToXY || atTarget));
         if (obstacle)
         {
             if (!pathBlocked) blockedSince = DateTime.Now;
@@ -106,7 +115,22 @@ void UpdateObstacleCheck()
     blindRuns = cast > 0 ? 0 : blindRuns + 1;
     if (blindRuns > 12) statusMessage = "Cameras can't see ahead";
 
-    if (pathBlocked && (DateTime.Now - blockedSince).TotalSeconds > obstacleTimeout)
+    double blockedFor = (DateTime.Now - blockedSince).TotalSeconds;
+    if (approach && pathBlocked && blockedFor > 4)
+    {
+        if (detourStep < 4)
+        {
+            // try the next way around: up, right, left, down from the straight line to the connector
+            detourStep++;
+            detourShift = (detourStep == 1 ? up : detourStep == 2 ? side : detourStep == 3 ? -side : -up) * shipDiameter;
+            blockedSince = DateTime.Now;
+            ClearBlocked();
+            statusMessage = "Docking: going around an obstacle";
+        }
+        else statusMessage = "Docking blocked: " + blockedBy + ", stopped";
+        return;
+    }
+    if (pathBlocked && blockedFor > obstacleTimeout)
         statusMessage = "Path blocked: " + blockedBy;
 }
 

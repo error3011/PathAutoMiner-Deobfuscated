@@ -23,6 +23,7 @@ class TrafficShip
     public bool queued;    // holding outside the docking area for station clearance
     public int jobFlag;    // 1: working in the job area, aligned to it; 2: deep in its hole (inside the rock)
     public int prio;       // right of way at the job site (TrafficPrio)
+    public float metric = -1; // distance to its next checkpoint (-1 unknown)
     public float fw, fh;   // its size across the drill face
     public long dock = 0;  // dock pool: connector this ship uses or heads for
     public int dockPhase = 0;
@@ -98,7 +99,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + ";" + Me.GetId());
+        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio() + "," + Math.Round(Vector3.Distance(shipPosition, navTargetPos)) + ";" + Me.GetId());
 }
 
 void ParseTraffic(String data)
@@ -132,7 +133,7 @@ void ParseTraffic(String data)
         if (f.Length >= 11)
         {
             String[] w = f[10].Split(',');
-            if (w.Length >= 4) { ship.fw = float.Parse(w[1]); ship.fh = float.Parse(w[2]); ship.jobFlag = int.Parse(w[3]); if (w.Length >= 5) ship.prio = int.Parse(w[4]); }
+            if (w.Length >= 4) { ship.fw = float.Parse(w[1]); ship.fh = float.Parse(w[2]); ship.jobFlag = int.Parse(w[3]); if (w.Length >= 5) ship.prio = int.Parse(w[4]); ship.metric = w.Length >= 6 ? float.Parse(w[5]) : -1; }
         }
     }
     catch { } // malformed message from another script: ignore
@@ -186,7 +187,15 @@ int TrafficPrio()
 {
     NavState s = currentNavState;
     if (s == NavState.ReturnToDock || s == NavState.FlyToPath || (s == NavState.FlyToDockArea && NearJobArea())) return 2;
-    return s == NavState.FlyToXY || s == NavState.Returning || s == NavState.FlyToDropPos || s == NavState.FlyToJobArea ? 1 : 0;
+    return s == NavState.FlyToXY || s == NavState.Returning || s == NavState.FlyToDropPos || (s == NavState.FlyToJobArea && NearJobArea()) ? 1 : 0;
+}
+
+// between ships with the same right of way: the one closer to its next checkpoint goes first (the
+// next path waypoint, or the path waypoint it flies to when it isn't on the path yet); equal: lower id
+bool GoesFirst(float myDist, TrafficShip o)
+{
+    if (o.metric < 0 || Math.Abs(myDist - o.metric) <= 2) return myGridId < o.id;
+    return myDist < o.metric;
 }
 
 // 0: not working the job; 1: in the job area, aligned to it; 2: deeper in its hole than half its size
@@ -292,7 +301,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
                     if (along < (shipSpeed - otherAlong) * 6f + clear * 4f) trafficShift = right * clear * 1.3f;
                     continue;
                 }
-                if (hasHeading && myGridId < other.id)
+                if (hasHeading && GoesFirst(targetDist, other))
                 {
                     // does the other ship have me ahead in its corridor too (crossing paths)? then one
                     // of us has to go: the lower id goes, keeping right, the other one waits
@@ -318,7 +327,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         if (rv2 < 0.25f) continue;
         float t = -Vector3.Dot(rel, rv) / rv2;
         if (t <= 0 || t > 5f || (rel + rv * t).Length() >= (sideBySide ? clear : clear * 1.1f)) continue;
-        if (other.prio > myPrio || (other.prio == myPrio && myGridId > other.id) || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
+        if (other.prio > myPrio || (other.prio == myPrio && !GoesFirst(targetDist, other)) || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
     }
 
     // safety net: held by traffic for too long -> stop waiting for a while and pass on the right

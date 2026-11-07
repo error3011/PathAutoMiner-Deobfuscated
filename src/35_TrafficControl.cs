@@ -18,6 +18,7 @@ class TCShip
     public float dia, fw, fh, limit = -1;
     public int jobFlag; // 1 in the job area, 2 deep in its hole
     public int prio;    // right of way: 2 leaving the job site, 1 moving between holes / arriving
+    public float metric = -1; // distance to its next checkpoint
     public String job = "";
     public int phase;
     public DateTime time;
@@ -52,7 +53,7 @@ void HandleTrafficControl(String data)
     if (f.Length >= 11)
     {
         String[] w = f[10].Split(',');
-        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); if (w.Length >= 5) s.prio = int.Parse(w[4]); }
+        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); if (w.Length >= 5) s.prio = int.Parse(w[4]); s.metric = w.Length >= 6 ? float.Parse(w[5]) : -1; }
     }
     s.pb = f.Length >= 12 ? long.Parse(f[11]) : 0;
     s.time = DateTime.Now;
@@ -130,6 +131,8 @@ long TCYielder(TCShip a, TCShip b, Vector3 ua, Vector3 ub, Vector3 rel, float di
     float ta = Vector3.Dot(ua, n), tb = Vector3.Dot(ub, -n); // speed towards the other ship
     if (ta - tb > 1) return a.id;
     if (tb - ta > 1) return b.id;
+    // the one closer to its next checkpoint goes first
+    if (a.metric >= 0 && b.metric >= 0 && Math.Abs(a.metric - b.metric) > 2) return a.metric > b.metric ? a.id : b.id;
     return a.id > b.id ? a.id : b.id;
 }
 

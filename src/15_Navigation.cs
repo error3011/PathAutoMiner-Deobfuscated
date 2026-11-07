@@ -473,6 +473,8 @@ void UpdateNavigation()
         }
         if (FindConnector(MyShipConnectorStatus.Connectable) != null || FindConnector(MyShipConnectorStatus.Connected) != null)
         { SetNavState(NavState.Docking); return; }
+        // reached the point beside the obstacle: from here straight to the connector again
+        if (detourShift.LengthSquared() > 0 && distToTarget < wpReachedDist && distToTarget != -1) { detourShift = new Vector3(); return; }
         if (distToTarget < wpReachedDist / 2 && distToTarget != -1)
         { SetNavState(NavState.AlignDock); return; }
     }

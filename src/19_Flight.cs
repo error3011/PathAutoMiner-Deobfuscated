@@ -2,7 +2,7 @@
 
 void UpdateFlight()
 {
-    Vector3 flyTarget = navTargetPos + trafficShift; // traffic: keep right of an oncoming PAM ship
+    Vector3 flyTarget = navTargetPos + trafficShift + detourShift; // traffic: keep right of an oncoming PAM ship; docking: way around an obstacle
     Vector3 toTarget = flyTarget - shipPosition;
     if (toTarget.Length() == 0) toTarget = new Vector3(0, 0, -1);
     Vector3 localTarget = LocalTransformDirection(remoteControl, toTarget);
