@@ -17,6 +17,7 @@ void UpdateFlight()
     if (generalSpeedLimit > 0) maxSpeed = Math.Min(generalSpeedLimit, maxSpeed);
     if (pathBlocked) maxSpeed = 0; // obstacle brake: cancel velocity and hold position
     if (trafficSpeedLimit >= 0) maxSpeed = Math.Min(maxSpeed, trafficSpeedLimit); // keep distance to a PAM ship ahead
+    if (NearJobArea()) maxSpeed = Math.Min(maxSpeed, jobAreaSpeed); // slow and steady next to the other ships
     if (softApproach) maxSpeed *= (float)Math.Min(1, SafeDiv(toTarget.Length(), wpReachedDist) / 2);
 
     Vector3 localVelocity = LocalTransformDirection(remoteControl, remoteControl.GetShipVelocities().LinearVelocity);

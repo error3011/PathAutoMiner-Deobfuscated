@@ -82,6 +82,10 @@ const bool resumeAfterRestart = true;//continue a job that was running when the 
 //Check if blocks are connected with conveyors
 const bool checkConveyorSystem = false;//temporarily disabled because of a SE bug
 
+//Speed limit near the job area (moving between holes, backing out, arriving and leaving), so ships
+//working next to each other don't change direction fast or bump into each other.
+const float jobAreaSpeed = 10f;//[m/s]
+
 //Debug drawing in 3D (offline worlds, needs Digi's "(DevTool) Programmable Block DebugAPI" mod):
 //on the [PAM-Controller] PB it draws ships, traffic, docking area and hole grids; on the ships it
 //sends their flight target, camera rays and job grid to the controller to draw. Off on a server.
@@ -2250,7 +2254,10 @@ void UpdateNavigation()
                 stuckCounter = 1;
                 SetBlocksEnabled(workTools, true);
                 miningTargetPos = GetJobGridPosition(holeCol, holeRow, true);
-                SetFlightTarget(miningTargetPos, 10);
+                // ship above the job plane (e.g. from the waiting spot): first over the hole at this
+                // height, then straight down to it
+                float h = Vector3.Dot(shipPosition - miningTargetPos, miningForward);
+                SetFlightTarget(h < -1 ? miningTargetPos + miningForward * h : miningTargetPos, 10);
                 AlignToDown(jobPosition.downDir, jobPosition.forwardDir, jobPosition.leftDir, false);
             }
         }
@@ -2258,7 +2265,22 @@ void UpdateNavigation()
         {
             // co-op: a ship with a lower id claimed this hole (or one next to it) at the same moment -> pick again
             if (myHole >= 0 && (JobCoordinated() ? coordCell >= 0 && coordCell != myHole : HoleConflict(myHole, true))) { stuckCounter = 0; return; }
-            if (distToTarget < wpReachedDist) { SetNavState(NavState.Mining); return; }
+            if (distToTarget < wpReachedDist)
+            {
+                if (Vector3.Distance(navTargetPos, miningTargetPos) > 1) { SetFlightTarget(miningTargetPos, 10); return; } // over the hole: down
+                SetNavState(NavState.Mining);
+                return;
+            }
+            // over the hole but the ground stops the way down (terrain above the job plane): start
+            // the hole where the ship is (drills are on)
+            Vector3 off = miningTargetPos - shipPosition;
+            float along = Vector3.Dot(off, miningForward);
+            if (along > 0 && (off - miningForward * along).Length() < wpReachedDist && shipSpeed < 0.3f)
+            {
+                if (++stuckCounter > 30) { cachedGridPos = shipPosition; SetNavState(NavState.Mining); }
+                return;
+            }
+            stuckCounter = 1;
         }
     }
 
@@ -2369,12 +2391,15 @@ void UpdateNavigation()
             lastDistToTarget = Vector3.Distance(shipPosition, miningTargetPos);
             UpdateSensor(false, true, 0, shipDiameter * sensorRange);
         }
-        SetFlightTarget(miningTargetPos, GetWorkSpeed(false));
+        if (stateFirstTick) exitRise = false;
+        SetFlightTarget(exitRise ? miningTargetPos - miningForward * shipDiameter : miningTargetPos, GetWorkSpeed(false));
 
-        if (Vector3.Distance(shipPosition, miningTargetPos) >= lastDistToTarget + 5) { SetBlocksEnabled(workTools, false); SetSortersEnabled(true); statusMessage = "Can´t return!"; }
+        if (!exitRise && Vector3.Distance(shipPosition, miningTargetPos) >= lastDistToTarget + 5) { SetBlocksEnabled(workTools, false); SetSortersEnabled(true); statusMessage = "Can´t return!"; }
 
         if (distToTarget < wpReachedDist)
         {
+            // leaving: first one ship size above the job plane, clear of the ships at the surface, before turning
+            if (currentNavState == NavState.ReturnToDock && !exitRise) { exitRise = true; return; }
             if (currentNavState == NavState.Returning && returnToJobAfter) SetNavState(NavState.FlyToJobPos);
             if (currentNavState == NavState.Returning) SetNavState(NavState.FlyToXY);
             if (currentNavState == NavState.FlyToDropPos) SetNavState(NavState.FlyToDropPos2);
@@ -2841,11 +2866,16 @@ void UpdateNavigation()
             SetBlocksEnabled(workTools, false);
             int closest = -1;
             double closestDist = -1;
-            for (int i = waypoints.Count - 1; i >= 0; i--)
-            {
-                double dist = Vector3.Distance(waypoints[i].position, shipPosition);
-                if (closestDist == -1 || dist < closestDist) { closest = i; closestDist = dist; }
-            }
+            // leaving the job site: the nearest waypoint outside the job area (don't go back down
+            // among the other ships to the path end, turn towards the path out there)
+            bool skipJob = NearJobArea();
+            for (int pass = 0; pass < 2 && closest == -1; pass++, skipJob = false)
+                for (int i = waypoints.Count - 1; i >= 0; i--)
+                {
+                    if (skipJob && Vector3.Distance(waypoints[i].position, jobPosition.position) < JobRadius() + shipDiameter) continue;
+                    double dist = Vector3.Distance(waypoints[i].position, shipPosition);
+                    if (closestDist == -1 || dist < closestDist) { closest = i; closestDist = dist; }
+                }
             if (closest == -1) { SetNavState(NavState.FlyToDockArea); return; }
             navTargetPos = waypoints[closest].position;
             SetFlightTarget(navTargetPos, 10);
@@ -3456,6 +3486,7 @@ void UpdateFlight()
     if (generalSpeedLimit > 0) maxSpeed = Math.Min(generalSpeedLimit, maxSpeed);
     if (pathBlocked) maxSpeed = 0; // obstacle brake: cancel velocity and hold position
     if (trafficSpeedLimit >= 0) maxSpeed = Math.Min(maxSpeed, trafficSpeedLimit); // keep distance to a PAM ship ahead
+    if (NearJobArea()) maxSpeed = Math.Min(maxSpeed, jobAreaSpeed); // slow and steady next to the other ships
     if (softApproach) maxSpeed *= (float)Math.Min(1, SafeDiv(toTarget.Length(), wpReachedDist) / 2);
 
     Vector3 localVelocity = LocalTransformDirection(remoteControl, remoteControl.GetShipVelocities().LinearVelocity);
@@ -5064,7 +5095,7 @@ String GetCmdResultLines(ShipInfo target)
         CommandState st = cmdShips[i].ProcessCommand(cmdSent, false, false, false);
         if (st == CommandState.Received) ok++;
         bool queued = homeQueue.Contains(cmdShips[i]);
-        if (shown++ < 8) s += "  " + cmdShips[i].name + ": " + (queued ? "queued (" + (homeQueue.IndexOf(cmdShips[i]) + 1) + ")" : st == CommandState.Received ? "received" :
+        if (shown++ < 8) s += "  " + cmdShips[i].name + ": " + (queued ? "waiting to leave (" + (homeQueue.IndexOf(cmdShips[i]) + 1) + ")" : st == CommandState.Received ? "received" :
             st == CommandState.Pending ? "pending..." : st == CommandState.NoAnswer ? "no answer!" : "-") + "\n";
     }
     if (shown > 8) s += "  +" + (shown - 8) + " more\n";
@@ -5700,6 +5731,7 @@ class TrafficShip
     public int hole = -1;  // co-op: grid cell it claims
     public bool queued;    // holding outside the docking area for station clearance
     public int jobFlag;    // 1: working in the job area, aligned to it; 2: deep in its hole (inside the rock)
+    public int prio;       // right of way at the job site (TrafficPrio)
     public float fw, fh;   // its size across the drill face
     public long dock = 0;  // dock pool: connector this ship uses or heads for
     public int dockPhase = 0;
@@ -5719,7 +5751,7 @@ const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
 int trafficTick = 0;
 String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
 int myHole = -1;              // grid cell of the hole this ship works on
-bool coopWaiting = false, coopWaitAside = false;
+bool coopWaiting = false, coopWaitAside = false, exitRise = false;
 Vector3 coopWaitPos = new Vector3();
 
 String JobKey()
@@ -5770,7 +5802,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag());
+        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + TrafficPrio());
 }
 
 void ParseTraffic(String data)
@@ -5800,11 +5832,11 @@ void ParseTraffic(String data)
         }
         ship.heading = f.Length >= 9 ? StringToVector(f[8]) : new Vector3();
         ship.queued = f.Length >= 10 && f[9] == "1";
-        ship.jobFlag = 0;
+        ship.jobFlag = 0; ship.prio = 0;
         if (f.Length >= 11)
         {
             String[] w = f[10].Split(',');
-            if (w.Length >= 4) { ship.fw = float.Parse(w[1]); ship.fh = float.Parse(w[2]); ship.jobFlag = int.Parse(w[3]); }
+            if (w.Length >= 4) { ship.fw = float.Parse(w[1]); ship.fh = float.Parse(w[2]); ship.jobFlag = int.Parse(w[3]); if (w.Length >= 5) ship.prio = int.Parse(w[4]); }
         }
     }
     catch { } // malformed message from another script: ignore
@@ -5847,6 +5879,18 @@ bool InJobArea()
     NavState s = currentNavState;
     return JobKey() != "" && (s == NavState.FlyToXY || s == NavState.Mining || s == NavState.Returning ||
         s == NavState.ReturnToDock || s == NavState.FlyToDropPos);
+}
+
+float JobRadius() { return 0.5f * (float)Math.Sqrt(Math.Pow(jobWidth * toolWidth, 2) + Math.Pow(jobHeight * toolHeight, 2)); }
+
+bool NearJobArea() { return JobKey() != "" && Vector3.Distance(shipPosition, jobPosition.position) < JobRadius() + shipDiameter * 2; }
+
+// right of way at the job site: 2 leaving (heading home), 1 moving between holes or arriving, 0 other
+int TrafficPrio()
+{
+    NavState s = currentNavState;
+    if (s == NavState.ReturnToDock || s == NavState.FlyToPath || (s == NavState.FlyToDockArea && NearJobArea())) return 2;
+    return s == NavState.FlyToXY || s == NavState.Returning || s == NavState.FlyToDropPos || s == NavState.FlyToJobArea ? 1 : 0;
 }
 
 // 0: not working the job; 1: in the job area, aligned to it; 2: deeper in its hole than half its size
@@ -5911,6 +5955,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
     right = right.LengthSquared() < 0.0001f ? -leftDirection : Vector3.Normalize(right);
     TrafficShip limiter = null;
     bool goingHome = currentNavState == NavState.FlyToDockArea && !StationCleared(1); // lines up in the dock queue
+    int myPrio = TrafficPrio();
 
     for (int i = 0; i < traffic.Count; i++)
     {
@@ -5933,7 +5978,9 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             float otherAlong = Vector3.Dot(other.vel, dir);
             bool hasHeading = other.heading.LengthSquared() > 0.25f;
             bool headOn = otherAlong < -1f || (hasHeading && Vector3.Dot(other.heading, dir) < -0.5f);
-            if (!precise) // docking, undocking, in a hole: no side step, hold for every ship in the way
+            // a ship with right of way (leaving the job site before ships moving between holes or
+            // arriving): give way, don't pass it
+            if (!precise && other.prio <= myPrio) // docking, undocking, in a hole: no side step, hold for every ship in the way
             {
                 if (other.queued)
                 {
@@ -5975,7 +6022,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         if (rv2 < 0.25f) continue;
         float t = -Vector3.Dot(rel, rv) / rv2;
         if (t <= 0 || t > 5f || (rel + rv * t).Length() >= (sideBySide ? clear : clear * 1.1f)) continue;
-        if (myGridId > other.id || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
+        if (other.prio > myPrio || (other.prio == myPrio && myGridId > other.id) || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
     }
 
     // safety net: held by traffic for too long -> stop waiting for a while and pass on the right
@@ -6866,6 +6913,7 @@ class TCShip
     public Vector3 pos, vel, heading;
     public float dia, fw, fh, limit = -1;
     public int jobFlag; // 1 in the job area, 2 deep in its hole
+    public int prio;    // right of way: 2 leaving the job site, 1 moving between holes / arriving
     public String job = "";
     public int phase;
     public DateTime time;
@@ -6896,11 +6944,11 @@ void HandleTrafficControl(String data)
     s.job = f[4];
     s.phase = int.Parse(f[7].Split(',')[1]);
     s.heading = StringToVector(f[8]);
-    s.jobFlag = 0;
+    s.jobFlag = 0; s.prio = 0;
     if (f.Length >= 11)
     {
         String[] w = f[10].Split(',');
-        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); }
+        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); if (w.Length >= 5) s.prio = int.Parse(w[4]); }
     }
     s.time = DateTime.Now;
 }
@@ -6953,7 +7001,7 @@ void ComputeTrafficControl()
             if (!tooClose && (t <= 0 || t > TCC_HORIZON || (rel + ru * t).Length() >= clear)) continue;
             // head-on: the ships pass each other on the right themselves (holding one would stop it from
             // stepping aside); the controller handles ships catching up and crossing paths
-            if (!tooClose && ua.LengthSquared() > 0.25f && ub.LengthSquared() > 0.25f && Vector3.Dot(Vector3.Normalize(ua), Vector3.Normalize(ub)) < -0.7f)
+            if (!tooClose && a.prio == b.prio && ua.LengthSquared() > 0.25f && ub.LengthSquared() > 0.25f && Vector3.Dot(Vector3.Normalize(ua), Vector3.Normalize(ub)) < -0.7f)
                 continue;
 
             TCPair p = null;
@@ -6965,12 +7013,14 @@ void ComputeTrafficControl()
             float lim = tooClose || t < 4 ? 0 : Math.Max(1, y.vel.Length() * 0.5f); // close: hold, later: slow down
             if (y.limit < 0 || lim < y.limit) y.limit = lim;
         }
+    HoldQueuedShips();
 }
 
 long TCYielder(TCShip a, TCShip b, Vector3 ua, Vector3 ub, Vector3 rel, float dist)
 {
     if (a.id == clearedShip) return b.id; // cleared to dock by this station
     if (b.id == clearedShip) return a.id;
+    if (a.prio != b.prio) return a.prio < b.prio ? a.id : b.id; // ships leaving the job site go first
     Vector3 n = dist > 0.01f ? rel / dist : new Vector3(1, 0, 0);
     float ta = Vector3.Dot(ua, n), tb = Vector3.Dot(ub, -n); // speed towards the other ship
     if (ta - tb > 1) return a.id;
@@ -7004,10 +7054,12 @@ String GetTrafficControlLine()
 }
 
 // ---- "Move home" for all ships: one at a time ----
-// Order: ships already out of the job area first, then ships at the surface of the job area, then
-// ships still deep in their holes; within each group the ship closest to the job position (where
-// the path starts) goes first. The next ship is sent when the previous one has moved away (3 ship
-// sizes, at least 40 m), at once if the previous one is docked, or after 45 s at the latest.
+// Every ship gets the order at once, so none of them starts a new hole; traffic control then holds
+// all but one (in their holes, or where they are). Order: ships already out of the job area first,
+// then ships at the surface of the job area, then ships still deep in their holes; within each
+// group the ship closest to the job position (where the path starts) goes first. The next ship
+// may go when the previous one has moved away (3 ship sizes, at least 40 m), at once if the
+// previous one is docked, or after 45 s at the latest.
 List<ShipInfo> homeQueue = new List<ShipInfo>();
 ShipInfo homeCurrent = null;
 Vector3 homeStartPos;
@@ -7038,6 +7090,7 @@ void StartStagedHome()
 {
     homeQueue.Clear();
     homeCurrent = null;
+    homeHeld.Clear();
     List<float> keys = new List<float>();
     for (int i = 0; i < connectedShips.Count; i++)
     {
@@ -7046,6 +7099,22 @@ void StartStagedHome()
         while (at < keys.Count && keys[at] <= k) at++;
         keys.Insert(at, k);
         homeQueue.Insert(at, connectedShips[i]);
+        connectedShips[i].ProcessCommand("HOMEPOS", true, false, false);
+        SendBroadcastTo("HOMEPOS", connectedShips[i].id, "HOMEPOS");
+    }
+}
+
+// ships of the staged "Move home" that have to wait: hold them (called after the pair checks)
+List<TCShip> homeHeld = new List<TCShip>();
+void HoldQueuedShips()
+{
+    homeHeld.Clear();
+    for (int i = 0; i < homeQueue.Count; i++)
+    {
+        TCShip t = FindTCShip(homeQueue[i]);
+        if (t == null) continue;
+        t.limit = 0;
+        homeHeld.Add(t);
     }
 }
 
@@ -7066,8 +7135,6 @@ void UpdateStagedHome()
     TCShip t = FindTCShip(homeCurrent);
     homeReleaseDist = t == null ? 40 : Math.Max(40, t.dia * 3);
     homeCurrentDocked = t != null && t.phase == 3 && t.vel.LengthSquared() < 0.25f;
-    homeCurrent.ProcessCommand("HOMEPOS", true, false, false);
-    SendBroadcastTo("HOMEPOS", homeCurrent.id, "HOMEPOS");
 }
 
 // ========================== 36_DebugDraw.cs ==========================

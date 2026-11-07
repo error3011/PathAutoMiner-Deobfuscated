@@ -81,6 +81,10 @@ const bool resumeAfterRestart = true;//continue a job that was running when the 
 //Check if blocks are connected with conveyors
 const bool checkConveyorSystem = false;//temporarily disabled because of a SE bug
 
+//Speed limit near the job area (moving between holes, backing out, arriving and leaving), so ships
+//working next to each other don't change direction fast or bump into each other.
+const float jobAreaSpeed = 10f;//[m/s]
+
 //Debug drawing in 3D (offline worlds, needs Digi's "(DevTool) Programmable Block DebugAPI" mod):
 //on the [PAM-Controller] PB it draws ships, traffic, docking area and hole grids; on the ships it
 //sends their flight target, camera rays and job grid to the controller to draw. Off on a server.

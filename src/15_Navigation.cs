@@ -107,7 +107,10 @@ void UpdateNavigation()
                 stuckCounter = 1;
                 SetBlocksEnabled(workTools, true);
                 miningTargetPos = GetJobGridPosition(holeCol, holeRow, true);
-                SetFlightTarget(miningTargetPos, 10);
+                // ship above the job plane (e.g. from the waiting spot): first over the hole at this
+                // height, then straight down to it
+                float h = Vector3.Dot(shipPosition - miningTargetPos, miningForward);
+                SetFlightTarget(h < -1 ? miningTargetPos + miningForward * h : miningTargetPos, 10);
                 AlignToDown(jobPosition.downDir, jobPosition.forwardDir, jobPosition.leftDir, false);
             }
         }
@@ -115,7 +118,22 @@ void UpdateNavigation()
         {
             // co-op: a ship with a lower id claimed this hole (or one next to it) at the same moment -> pick again
             if (myHole >= 0 && (JobCoordinated() ? coordCell >= 0 && coordCell != myHole : HoleConflict(myHole, true))) { stuckCounter = 0; return; }
-            if (distToTarget < wpReachedDist) { SetNavState(NavState.Mining); return; }
+            if (distToTarget < wpReachedDist)
+            {
+                if (Vector3.Distance(navTargetPos, miningTargetPos) > 1) { SetFlightTarget(miningTargetPos, 10); return; } // over the hole: down
+                SetNavState(NavState.Mining);
+                return;
+            }
+            // over the hole but the ground stops the way down (terrain above the job plane): start
+            // the hole where the ship is (drills are on)
+            Vector3 off = miningTargetPos - shipPosition;
+            float along = Vector3.Dot(off, miningForward);
+            if (along > 0 && (off - miningForward * along).Length() < wpReachedDist && shipSpeed < 0.3f)
+            {
+                if (++stuckCounter > 30) { cachedGridPos = shipPosition; SetNavState(NavState.Mining); }
+                return;
+            }
+            stuckCounter = 1;
         }
     }
 
@@ -226,12 +244,15 @@ void UpdateNavigation()
             lastDistToTarget = Vector3.Distance(shipPosition, miningTargetPos);
             UpdateSensor(false, true, 0, shipDiameter * sensorRange);
         }
-        SetFlightTarget(miningTargetPos, GetWorkSpeed(false));
+        if (stateFirstTick) exitRise = false;
+        SetFlightTarget(exitRise ? miningTargetPos - miningForward * shipDiameter : miningTargetPos, GetWorkSpeed(false));
 
-        if (Vector3.Distance(shipPosition, miningTargetPos) >= lastDistToTarget + 5) { SetBlocksEnabled(workTools, false); SetSortersEnabled(true); statusMessage = "Can´t return!"; }
+        if (!exitRise && Vector3.Distance(shipPosition, miningTargetPos) >= lastDistToTarget + 5) { SetBlocksEnabled(workTools, false); SetSortersEnabled(true); statusMessage = "Can´t return!"; }
 
         if (distToTarget < wpReachedDist)
         {
+            // leaving: first one ship size above the job plane, clear of the ships at the surface, before turning
+            if (currentNavState == NavState.ReturnToDock && !exitRise) { exitRise = true; return; }
             if (currentNavState == NavState.Returning && returnToJobAfter) SetNavState(NavState.FlyToJobPos);
             if (currentNavState == NavState.Returning) SetNavState(NavState.FlyToXY);
             if (currentNavState == NavState.FlyToDropPos) SetNavState(NavState.FlyToDropPos2);
@@ -698,11 +719,16 @@ void UpdateNavigation()
             SetBlocksEnabled(workTools, false);
             int closest = -1;
             double closestDist = -1;
-            for (int i = waypoints.Count - 1; i >= 0; i--)
-            {
-                double dist = Vector3.Distance(waypoints[i].position, shipPosition);
-                if (closestDist == -1 || dist < closestDist) { closest = i; closestDist = dist; }
-            }
+            // leaving the job site: the nearest waypoint outside the job area (don't go back down
+            // among the other ships to the path end, turn towards the path out there)
+            bool skipJob = NearJobArea();
+            for (int pass = 0; pass < 2 && closest == -1; pass++, skipJob = false)
+                for (int i = waypoints.Count - 1; i >= 0; i--)
+                {
+                    if (skipJob && Vector3.Distance(waypoints[i].position, jobPosition.position) < JobRadius() + shipDiameter) continue;
+                    double dist = Vector3.Distance(waypoints[i].position, shipPosition);
+                    if (closestDist == -1 || dist < closestDist) { closest = i; closestDist = dist; }
+                }
             if (closest == -1) { SetNavState(NavState.FlyToDockArea); return; }
             navTargetPos = waypoints[closest].position;
             SetFlightTarget(navTargetPos, 10);

@@ -17,6 +17,7 @@ class TCShip
     public Vector3 pos, vel, heading;
     public float dia, fw, fh, limit = -1;
     public int jobFlag; // 1 in the job area, 2 deep in its hole
+    public int prio;    // right of way: 2 leaving the job site, 1 moving between holes / arriving
     public String job = "";
     public int phase;
     public DateTime time;
@@ -47,11 +48,11 @@ void HandleTrafficControl(String data)
     s.job = f[4];
     s.phase = int.Parse(f[7].Split(',')[1]);
     s.heading = StringToVector(f[8]);
-    s.jobFlag = 0;
+    s.jobFlag = 0; s.prio = 0;
     if (f.Length >= 11)
     {
         String[] w = f[10].Split(',');
-        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); }
+        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); if (w.Length >= 5) s.prio = int.Parse(w[4]); }
     }
     s.time = DateTime.Now;
 }
@@ -104,7 +105,7 @@ void ComputeTrafficControl()
             if (!tooClose && (t <= 0 || t > TCC_HORIZON || (rel + ru * t).Length() >= clear)) continue;
             // head-on: the ships pass each other on the right themselves (holding one would stop it from
             // stepping aside); the controller handles ships catching up and crossing paths
-            if (!tooClose && ua.LengthSquared() > 0.25f && ub.LengthSquared() > 0.25f && Vector3.Dot(Vector3.Normalize(ua), Vector3.Normalize(ub)) < -0.7f)
+            if (!tooClose && a.prio == b.prio && ua.LengthSquared() > 0.25f && ub.LengthSquared() > 0.25f && Vector3.Dot(Vector3.Normalize(ua), Vector3.Normalize(ub)) < -0.7f)
                 continue;
 
             TCPair p = null;
@@ -116,12 +117,14 @@ void ComputeTrafficControl()
             float lim = tooClose || t < 4 ? 0 : Math.Max(1, y.vel.Length() * 0.5f); // close: hold, later: slow down
             if (y.limit < 0 || lim < y.limit) y.limit = lim;
         }
+    HoldQueuedShips();
 }
 
 long TCYielder(TCShip a, TCShip b, Vector3 ua, Vector3 ub, Vector3 rel, float dist)
 {
     if (a.id == clearedShip) return b.id; // cleared to dock by this station
     if (b.id == clearedShip) return a.id;
+    if (a.prio != b.prio) return a.prio < b.prio ? a.id : b.id; // ships leaving the job site go first
     Vector3 n = dist > 0.01f ? rel / dist : new Vector3(1, 0, 0);
     float ta = Vector3.Dot(ua, n), tb = Vector3.Dot(ub, -n); // speed towards the other ship
     if (ta - tb > 1) return a.id;
@@ -155,10 +158,12 @@ String GetTrafficControlLine()
 }
 
 // ---- "Move home" for all ships: one at a time ----
-// Order: ships already out of the job area first, then ships at the surface of the job area, then
-// ships still deep in their holes; within each group the ship closest to the job position (where
-// the path starts) goes first. The next ship is sent when the previous one has moved away (3 ship
-// sizes, at least 40 m), at once if the previous one is docked, or after 45 s at the latest.
+// Every ship gets the order at once, so none of them starts a new hole; traffic control then holds
+// all but one (in their holes, or where they are). Order: ships already out of the job area first,
+// then ships at the surface of the job area, then ships still deep in their holes; within each
+// group the ship closest to the job position (where the path starts) goes first. The next ship
+// may go when the previous one has moved away (3 ship sizes, at least 40 m), at once if the
+// previous one is docked, or after 45 s at the latest.
 List<ShipInfo> homeQueue = new List<ShipInfo>();
 ShipInfo homeCurrent = null;
 Vector3 homeStartPos;
@@ -189,6 +194,7 @@ void StartStagedHome()
 {
     homeQueue.Clear();
     homeCurrent = null;
+    homeHeld.Clear();
     List<float> keys = new List<float>();
     for (int i = 0; i < connectedShips.Count; i++)
     {
@@ -197,6 +203,22 @@ void StartStagedHome()
         while (at < keys.Count && keys[at] <= k) at++;
         keys.Insert(at, k);
         homeQueue.Insert(at, connectedShips[i]);
+        connectedShips[i].ProcessCommand("HOMEPOS", true, false, false);
+        SendBroadcastTo("HOMEPOS", connectedShips[i].id, "HOMEPOS");
+    }
+}
+
+// ships of the staged "Move home" that have to wait: hold them (called after the pair checks)
+List<TCShip> homeHeld = new List<TCShip>();
+void HoldQueuedShips()
+{
+    homeHeld.Clear();
+    for (int i = 0; i < homeQueue.Count; i++)
+    {
+        TCShip t = FindTCShip(homeQueue[i]);
+        if (t == null) continue;
+        t.limit = 0;
+        homeHeld.Add(t);
     }
 }
 
@@ -217,6 +239,4 @@ void UpdateStagedHome()
     TCShip t = FindTCShip(homeCurrent);
     homeReleaseDist = t == null ? 40 : Math.Max(40, t.dia * 3);
     homeCurrentDocked = t != null && t.phase == 3 && t.vel.LengthSquared() < 0.25f;
-    homeCurrent.ProcessCommand("HOMEPOS", true, false, false);
-    SendBroadcastTo("HOMEPOS", homeCurrent.id, "HOMEPOS");
 }

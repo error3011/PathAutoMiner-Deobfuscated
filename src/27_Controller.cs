@@ -138,7 +138,7 @@ String GetCmdResultLines(ShipInfo target)
         CommandState st = cmdShips[i].ProcessCommand(cmdSent, false, false, false);
         if (st == CommandState.Received) ok++;
         bool queued = homeQueue.Contains(cmdShips[i]);
-        if (shown++ < 8) s += "  " + cmdShips[i].name + ": " + (queued ? "queued (" + (homeQueue.IndexOf(cmdShips[i]) + 1) + ")" : st == CommandState.Received ? "received" :
+        if (shown++ < 8) s += "  " + cmdShips[i].name + ": " + (queued ? "waiting to leave (" + (homeQueue.IndexOf(cmdShips[i]) + 1) + ")" : st == CommandState.Received ? "received" :
             st == CommandState.Pending ? "pending..." : st == CommandState.NoAnswer ? "no answer!" : "-") + "\n";
     }
     if (shown > 8) s += "  +" + (shown - 8) + " more\n";
