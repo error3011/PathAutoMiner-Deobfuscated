@@ -50,6 +50,7 @@ void ControllerMainLoop(string argument)
 
     if (isTick) UpdateDockControl(); // station dock control (clearance for one ship at a time)
     if (isTick) UpdateJobCoordination(); // co-op jobs: hand out holes
+    if (isTick) UpdateTrafficControl();  // all ships at once: who gives way
     UpdateControllerDisplays();
 }
 
@@ -278,7 +279,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
     String thinSeparator = "--------------------------------------------\n";
 
     if (selectedShip == null || currentMenu == MenuPage.Main || currentMenu == MenuPage.SendCommandAll)
-        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n" + GetDockAreaLine() + GetJobLines();
+        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
     else text += GetShipStatusLine(selectedShip) + "\n";
     text += separator;
 

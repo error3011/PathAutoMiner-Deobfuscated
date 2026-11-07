@@ -64,6 +64,13 @@ void UpdateTraffic()
     }
     for (int i = traffic.Count - 1; i >= 0; i--)
         if ((DateTime.Now - traffic[i].time).TotalSeconds > TRAFFIC_TIMEOUT) traffic.RemoveAt(i);
+    if (tccListener == null) tccListener = IGC.RegisterBroadcastListener(TCC_TAG);
+    budget = 5;
+    while (tccListener.HasPendingMessage && budget-- > 0)
+    {
+        String data = tccListener.AcceptMessage().Data as String;
+        if (data != null) try { ParseTrafficControl(data); } catch { }
+    }
     if (coordListener == null) coordListener = IGC.RegisterBroadcastListener(JOB_TAG);
     budget = 10;
     while (coordListener.HasPendingMessage && budget-- > 0)
@@ -169,6 +176,30 @@ void UpdateTrafficAvoidance()
     if (!trafficEnabled || (!free && !IsPreciseFlightState(currentNavState))) { trafficHolding = false; return; }
     trafficMyVel = remoteControl.GetShipVelocities().LinearVelocity;
     ComputeTrafficAvoidance(remoteControl.GetNaturalGravity(), !free);
+    ApplyTrafficControl();
+}
+
+// [PAM-Controller] traffic control: "C;ship:limit,..." lists the ships that have to give way
+IMyBroadcastListener tccListener = null;
+float tccLimit = -1;
+DateTime tccTime = DateTime.MinValue;
+
+void ParseTrafficControl(String data)
+{
+    if (!data.StartsWith("C;")) return;
+    tccTime = DateTime.Now;
+    tccLimit = -1;
+    String me = myGridId + ":";
+    String[] e = data.Substring(2).Split(',');
+    for (int i = 0; i < e.Length; i++) if (e[i].StartsWith(me)) tccLimit = float.Parse(e[i].Substring(me.Length));
+}
+
+// on top of the ship's own avoidance, after its 15 s escape: the controller sees all ships
+void ApplyTrafficControl()
+{
+    if (tccLimit < 0 || (DateTime.Now - tccTime).TotalSeconds > 1.5) return;
+    trafficSpeedLimit = trafficSpeedLimit < 0 ? tccLimit : Math.Min(trafficSpeedLimit, tccLimit);
+    if (tccLimit < 0.5f) statusMessage = "Traffic: giving way (controller)";
 }
 
 void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
@@ -204,11 +235,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             float otherAlong = Vector3.Dot(other.vel, dir);
             bool hasHeading = other.heading.LengthSquared() > 0.25f;
             bool headOn = otherAlong < -1f || (hasHeading && Vector3.Dot(other.heading, dir) < -0.5f);
-            if (precise)
-            {
-                if (headOn && myGridId < other.id) continue; // the other ship gives way
-            }
-            else
+            if (!precise) // docking, undocking, in a hole: no side step, hold for every ship in the way
             {
                 if (other.queued)
                 {
@@ -395,6 +422,7 @@ int ClaimHole(int idx)
 // answer within 5 s) the ships use the peer rules above.
 
 const String JOB_TAG = "[PAMJOB]";
+const String TCC_TAG = "[PAMTCC]";
 IMyBroadcastListener coordListener = null;
 DateTime coordTime = DateTime.MinValue;
 DateTime coordWaitSince = DateTime.Now;

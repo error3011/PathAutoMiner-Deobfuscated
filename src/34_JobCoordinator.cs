@@ -37,7 +37,9 @@ void UpdateJobCoordination()
     while (jobTrafficListener.HasPendingMessage && budget-- > 0)
     {
         String data = jobTrafficListener.AcceptMessage().Data as String;
-        if (data != null) try { HandleJobTraffic(data); } catch { }
+        if (data == null) continue;
+        try { HandleJobTraffic(data); } catch { }
+        try { HandleTrafficControl(data); } catch { }
     }
     for (int j = jobs.Count - 1; j >= 0; j--)
     {
