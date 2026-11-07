@@ -21,7 +21,7 @@ class TrafficShip
     public String job = "";
     public int hole = -1;  // co-op: grid cell it claims
     public bool queued;    // holding outside the docking area for station clearance
-    public bool inJob;     // working in the job area (moving between holes, mining, backing out): aligned to the job
+    public int jobFlag;    // 1: working in the job area, aligned to it; 2: deep in its hole (inside the rock)
     public float fw, fh;   // its size across the drill face
     public long dock = 0;  // dock pool: connector this ship uses or heads for
     public int dockPhase = 0;
@@ -85,7 +85,7 @@ void UpdateTraffic()
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + (InJobArea() ? 1 : 0));
+        ";" + (dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag());
 }
 
 void ParseTraffic(String data)
@@ -115,11 +115,11 @@ void ParseTraffic(String data)
         }
         ship.heading = f.Length >= 9 ? StringToVector(f[8]) : new Vector3();
         ship.queued = f.Length >= 10 && f[9] == "1";
-        ship.inJob = false;
+        ship.jobFlag = 0;
         if (f.Length >= 11)
         {
             String[] w = f[10].Split(',');
-            if (w.Length >= 4) { ship.fw = float.Parse(w[1]); ship.fh = float.Parse(w[2]); ship.inJob = w[3] == "1"; }
+            if (w.Length >= 4) { ship.fw = float.Parse(w[1]); ship.fh = float.Parse(w[2]); ship.jobFlag = int.Parse(w[3]); }
         }
     }
     catch { } // malformed message from another script: ignore
@@ -158,13 +158,22 @@ Vector3 trafficMyVel = new Vector3();
 // (the ship has to stay on its line to the connector or hole).
 bool InJobArea()
 {
-    return jobState == JobState.Active && (currentNavState == NavState.FlyToXY || currentNavState == NavState.Mining || currentNavState == NavState.Returning);
+    NavState s = currentNavState;
+    return JobKey() != "" && (s == NavState.FlyToXY || s == NavState.Mining || s == NavState.Returning ||
+        s == NavState.ReturnToDock || s == NavState.FlyToDropPos);
+}
+
+// 0: not working the job; 1: in the job area, aligned to it; 2: deeper in its hole than half its size
+int JobFlag()
+{
+    if (!InJobArea()) return 0;
+    return currentNavState != NavState.FlyToXY && Vector3.Dot(shipPosition - miningTargetPos, miningForward) > shipDiameter * 0.5f ? 2 : 1;
 }
 
 bool IsPreciseFlightState(NavState s)
 {
     return s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.Docking || s == NavState.RetryDocking ||
-        s == NavState.Undocking || s == NavState.Returning || s == NavState.AlignJob;
+        s == NavState.Undocking || s == NavState.Returning || s == NavState.ReturnToDock || s == NavState.FlyToDropPos || s == NavState.AlignJob;
 }
 
 void UpdateTrafficAvoidance()
@@ -226,10 +235,13 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         float clear = (shipDiameter + other.diameter) * 0.5f;
         // two ships working the same job are aligned to it and drill different holes, so a ship at
         // another hole, even the next one, is never in the way: only closer than one hole spacing counts
-        bool sideBySide = other.inJob && InJobArea() && other.job == JobKey();
+        bool sameJob = other.job != "" && other.job == JobKey();
+        if (sameJob && other.jobFlag == 2) continue; // inside the rock in its own hole: can't be in anyone's way
+        bool sideBySide = sameJob && other.jobFlag == 1 && InJobArea();
         if (sideBySide) clear = Math.Min(toolWidth, toolHeight) * 0.9f;
+        float corridor = clear * (sideBySide ? 1f : 1.2f); // side by side: a ship at the next hole is outside it
         float along = haveDir ? Vector3.Dot(rel, dir) : 0;
-        if (along > 0 && (rel - dir * along).Length() <= clear * 1.2f)
+        if (along > 0 && (rel - dir * along).Length() <= corridor)
         {
             // in my corridor, ahead
             float otherAlong = Vector3.Dot(other.vel, dir);
@@ -257,7 +269,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
                     // of us has to go: the lower id goes, keeping right, the other one waits
                     Vector3 back = -rel;
                     float otherAhead = Vector3.Dot(back, other.heading);
-                    if (otherAhead > 0 && (back - other.heading * otherAhead).Length() <= clear * 1.2f)
+                    if (otherAhead > 0 && (back - other.heading * otherAhead).Length() <= corridor)
                     { trafficShift = right * clear * 1.3f; continue; }
                 }
             }
@@ -271,12 +283,12 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         // any other moving ship on a collision course (crossing, from the side or from behind):
         // the higher id stops; both stop when it's close
         if (other.vel.LengthSquared() < 1f) continue;
-        if (haveDir && (rel - dir * along).Length() <= clear * 1.2f) continue; // behind me in my lane: it has to slow down, not me
+        if (haveDir && (rel - dir * along).Length() <= corridor) continue; // behind me in my lane: it has to slow down, not me
         Vector3 rv = other.vel - trafficMyVel;
         float rv2 = rv.LengthSquared();
         if (rv2 < 0.25f) continue;
         float t = -Vector3.Dot(rel, rv) / rv2;
-        if (t <= 0 || t > 5f || (rel + rv * t).Length() >= clear * 1.1f) continue;
+        if (t <= 0 || t > 5f || (rel + rv * t).Length() >= (sideBySide ? clear : clear * 1.1f)) continue;
         if (myGridId > other.id || t < 2f) { trafficSpeedLimit = 0; limiter = other; }
     }
 

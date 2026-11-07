@@ -51,6 +51,7 @@ void ControllerMainLoop(string argument)
     if (isTick) UpdateDockControl(); // station dock control (clearance for one ship at a time)
     if (isTick) UpdateJobCoordination(); // co-op jobs: hand out holes
     if (isTick) UpdateTrafficControl();  // all ships at once: who gives way
+    if (isTick) UpdateStagedHome();      // "Move home" for all: one ship after the other
     UpdateControllerDisplays();
 }
 
@@ -121,7 +122,8 @@ const float CMD_RESULT_TIME = 20f; //[s]
 
 bool ShowCmdResult(ShipInfo target, String cmd)
 {
-    return cmd == cmdSent && target == cmdTarget && (DateTime.Now - cmdTime).TotalSeconds < CMD_RESULT_TIME;
+    return cmd == cmdSent && target == cmdTarget && ((DateTime.Now - cmdTime).TotalSeconds < CMD_RESULT_TIME ||
+        (cmd == "HOMEPOS" && (homeQueue.Count > 0 || homeCurrent != null))); // staged "Move home" still running
 }
 
 // one line per ship the last command went to: received / pending / no answer
@@ -134,7 +136,9 @@ String GetCmdResultLines(ShipInfo target)
     {
         CommandState st = cmdShips[i].ProcessCommand(cmdSent, false, false, false);
         if (st == CommandState.Received) ok++;
-        if (shown++ < 8) s += "  " + cmdShips[i].name + ": " + (st == CommandState.Received ? "received" : st == CommandState.Pending ? "pending..." : st == CommandState.NoAnswer ? "no answer!" : "-") + "\n";
+        bool queued = homeQueue.Contains(cmdShips[i]);
+        if (shown++ < 8) s += "  " + cmdShips[i].name + ": " + (queued ? "queued (" + (homeQueue.IndexOf(cmdShips[i]) + 1) + ")" : st == CommandState.Received ? "received" :
+            st == CommandState.Pending ? "pending..." : st == CommandState.NoAnswer ? "no answer!" : "-") + "\n";
     }
     if (shown > 8) s += "  +" + (shown - 8) + " more\n";
     return "--------------------------------------------\n" + cmdSent + ": " + ok + "/" + cmdShips.Count + " received\n" + s;
@@ -145,6 +149,9 @@ void SendCommandToShip(ShipInfo ship, String cmd)
     cmdSent = cmd; cmdTarget = ship; cmdTime = DateTime.Now;
     cmdShips.Clear();
     if (ship == null) cmdShips.AddRange(connectedShips); else cmdShips.Add(ship);
+    // a new command replaces a staged "Move home" (for that ship, or for all)
+    if (ship == null) { homeQueue.Clear(); homeCurrent = null; } else homeQueue.Remove(ship);
+    if (ship == null && cmd == "HOMEPOS") { StartStagedHome(); return; } // one at a time, see UpdateStagedHome
     if (ship == null)
     {
         for (int i = 0; i < connectedShips.Count; i++)

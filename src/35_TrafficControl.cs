@@ -16,7 +16,7 @@ class TCShip
     public long id;
     public Vector3 pos, vel, heading;
     public float dia, fw, fh, limit = -1;
-    public bool inJob;
+    public int jobFlag; // 1 in the job area, 2 deep in its hole
     public String job = "";
     public int phase;
     public DateTime time;
@@ -32,7 +32,7 @@ List<TCShip> tcShips = new List<TCShip>();
 List<TCPair> tcPairs = new List<TCPair>();
 int tcSendTick = 0;
 
-// traffic message: id;pos;vel;dia;job;hole;doneHoles;dock,phase;heading;queued;want,footW,footH,inJob
+// traffic message: id;pos;vel;dia;job;hole;doneHoles;dock,phase;heading;queued;want,footW,footH,jobFlag
 void HandleTrafficControl(String data)
 {
     String[] f = data.Split(';');
@@ -47,11 +47,11 @@ void HandleTrafficControl(String data)
     s.job = f[4];
     s.phase = int.Parse(f[7].Split(',')[1]);
     s.heading = StringToVector(f[8]);
-    s.inJob = false;
+    s.jobFlag = 0;
     if (f.Length >= 11)
     {
         String[] w = f[10].Split(',');
-        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.inJob = w[3] == "1"; }
+        if (w.Length >= 4) { s.fw = float.Parse(w[1]); s.fh = float.Parse(w[2]); s.jobFlag = int.Parse(w[3]); }
     }
     s.time = DateTime.Now;
 }
@@ -90,7 +90,9 @@ void ComputeTrafficControl()
             float dist = rel.Length();
             float clear = (a.dia + b.dia) * 0.55f;
             // two ships working the same job drill different holes: only closer than one hole spacing counts
-            if (a.inJob && b.inJob && a.job != "" && a.job == b.job)
+            bool sameJob = a.job != "" && a.job == b.job;
+            if (sameJob && (a.jobFlag == 2 || b.jobFlag == 2)) continue; // one is inside the rock in its hole
+            if (sameJob && a.jobFlag == 1 && b.jobFlag == 1)
             {
                 String[] k = a.job.Split('|');
                 if (k.Length >= 8) clear = Math.Min(float.Parse(k[6]), float.Parse(k[7])) * 0.9f;
@@ -150,4 +152,71 @@ String GetTrafficControlLine()
     }
     if (tcShips.Count == 0) return "";
     return "Traffic: " + moving + " moving" + (held > 0 ? ", " + held + " giving way" : "") + "\n";
+}
+
+// ---- "Move home" for all ships: one at a time ----
+// Order: ships already out of the job area first, then ships at the surface of the job area, then
+// ships still deep in their holes; within each group the ship closest to the job position (where
+// the path starts) goes first. The next ship is sent when the previous one has moved away (3 ship
+// sizes, at least 40 m), at once if the previous one is docked, or after 45 s at the latest.
+List<ShipInfo> homeQueue = new List<ShipInfo>();
+ShipInfo homeCurrent = null;
+Vector3 homeStartPos;
+DateTime homeSentTime;
+float homeReleaseDist = 40;
+bool homeCurrentDocked = false;
+
+TCShip FindTCShip(ShipInfo s)
+{
+    TCShip best = null;
+    for (int i = 0; i < tcShips.Count; i++)
+        if (Vector3.Distance(tcShips[i].pos, s.position) < 15 && (best == null ||
+            Vector3.Distance(tcShips[i].pos, s.position) < Vector3.Distance(best.pos, s.position))) best = tcShips[i];
+    return best;
+}
+
+float HomeOrderKey(ShipInfo s)
+{
+    TCShip t = FindTCShip(s);
+    if (t == null) return 0;
+    float k = t.jobFlag * 1000000f;
+    String[] key = t.job.Split('|');
+    if (key.Length >= 3) k += Vector3.Distance(t.pos, new Vector3(float.Parse(key[0]), float.Parse(key[1]), float.Parse(key[2])));
+    return k;
+}
+
+void StartStagedHome()
+{
+    homeQueue.Clear();
+    homeCurrent = null;
+    List<float> keys = new List<float>();
+    for (int i = 0; i < connectedShips.Count; i++)
+    {
+        float k = HomeOrderKey(connectedShips[i]);
+        int at = 0;
+        while (at < keys.Count && keys[at] <= k) at++;
+        keys.Insert(at, k);
+        homeQueue.Insert(at, connectedShips[i]);
+    }
+}
+
+void UpdateStagedHome()
+{
+    if (homeCurrent != null)
+    {
+        bool gone = homeCurrentDocked || Vector3.Distance(homeCurrent.position, homeStartPos) > homeReleaseDist ||
+            (DateTime.Now - homeSentTime).TotalSeconds > 45 || homeCurrent.IsTimedOut();
+        if (!gone) return;
+        homeCurrent = null;
+    }
+    if (homeQueue.Count == 0) return;
+    homeCurrent = homeQueue[0];
+    homeQueue.RemoveAt(0);
+    homeStartPos = homeCurrent.position;
+    homeSentTime = DateTime.Now;
+    TCShip t = FindTCShip(homeCurrent);
+    homeReleaseDist = t == null ? 40 : Math.Max(40, t.dia * 3);
+    homeCurrentDocked = t != null && t.phase == 3 && t.vel.LengthSquared() < 0.25f;
+    homeCurrent.ProcessCommand("HOMEPOS", true, false, false);
+    SendBroadcastTo("HOMEPOS", homeCurrent.id, "HOMEPOS");
 }
