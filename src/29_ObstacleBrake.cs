@@ -100,6 +100,7 @@ void UpdateObstacleCheck()
             blockedBy = hit.Type.ToString();
         }
         else CountClear();
+        if (debugDraw && debugRays.Count < 16) debugRays.Add(VectorToString(cam.GetPosition()) + "," + VectorToString(end) + "," + (obstacle ? 1 : 0));
     }
     // no camera could look ahead for 2 s: say so (the ship keeps flying, as without cameras)
     blindRuns = cast > 0 ? 0 : blindRuns + 1;

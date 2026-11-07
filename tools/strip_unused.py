@@ -95,13 +95,18 @@ def _split_top_level(code):
     return items
 
 
+_NOISE = re.compile(r'@"(?:[^"]|"")*"|"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\\]|\\.)\'|/\*.*?\*/|//[^\n]*', re.S)
+
+
 def _strip_noise(text):
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
-    text = re.sub(r"//[^\n]*", " ", text)
-    text = re.sub(r'@"(?:[^"]|"")*"', '""', text)
-    text = re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)
-    text = re.sub(r"'(?:[^'\\]|\\.)'", "' '", text)
-    return text
+    """Remove comments, strings and char literals so identifiers can be scanned (one pass, so a
+    // inside a string is not taken for a comment)."""
+    def repl(m):
+        t = m.group(0)
+        if t.startswith("/"):
+            return " "
+        return "' '" if t.startswith("'") else '""'
+    return _NOISE.sub(repl, text)
 
 
 _METHOD_HEAD = re.compile(
@@ -129,6 +134,42 @@ def _method_name(item_code):
     return name
 
 
+_TYPE_DECL = re.compile(r"\b(?:class|struct|enum|interface)\s+([A-Za-z_]\w*)")
+
+
+def _declared_names(item_code):
+    """Names a field or type item declares (empty when it can't tell: then it is always kept)."""
+    clean = _strip_noise(item_code).strip()
+    if not clean:
+        return []
+    head = clean.split("{", 1)[0]
+    m = _TYPE_DECL.search(head)
+    if m:
+        return [m.group(1)]
+    if not clean.endswith(";") or "(" in clean.split("=", 1)[0]:
+        return []
+    body = clean[:-1]
+    parts, depth, cur = [], 0, ""
+    for ch in body:  # split declarators at top-level commas:  int a = 0, b = 1;
+        if ch in "<({[":
+            depth += 1
+        elif ch in ">)}]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur)
+    names = []
+    for part in parts:
+        left = part.split("=", 1)[0]
+        ids = _IDENT.findall(left)
+        if ids:
+            names.append(ids[-1])
+    return names
+
+
 def make_variant(source, variant):
     """Return (code, report) for the given variant name ('ship' or 'controller')."""
     cfg = VARIANTS[variant]
@@ -142,19 +183,23 @@ def make_variant(source, variant):
     items = [it for it in items if it["name"] not in remove]
     items.append({"text": "\n" + cfg["stub"] + "\n", "name": cfg["remove"][0]})
 
+    # fields and types are dropped too when nothing that is kept uses them
+    for it in items:
+        it["decl"] = [it["name"]] if it["name"] else _declared_names(it["text"])
+
     by_name = {}
     for it in items:
-        if it["name"]:
-            by_name.setdefault(it["name"], []).append(it)
+        for n in it["decl"]:
+            by_name.setdefault(n, []).append(it)
 
     def idents(text):
         return set(_IDENT.findall(_strip_noise(text)))
 
     reachable = set()
     queue = [r for r in ROOTS if r in by_name]
-    # everything referenced from fields/types counts as used
+    # items whose declaration can't be told are always kept, with what they use
     for it in items:
-        if not it["name"]:
+        if not it["decl"]:
             queue.extend(x for x in idents(it["text"]) if x in by_name)
     while queue:
         name = queue.pop()
@@ -168,8 +213,8 @@ def make_variant(source, variant):
 
     kept, dropped = [], []
     for it in items:
-        if it["name"] and it["name"] not in reachable:
-            dropped.append(it["name"])
+        if it["decl"] and not any(n in reachable for n in it["decl"]):
+            dropped.append(it["decl"][0])
             # keep leading comments (section banners, the settings end marker) of a dropped method
             lead = re.match(r"(?:\s*(?://[^\n]*(?:\n|$)|/\*.*?\*/))*", it["text"], re.S).group(0)
             kept.append(lead)

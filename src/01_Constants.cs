@@ -81,4 +81,9 @@ const bool resumeAfterRestart = true;//continue a job that was running when the 
 //Check if blocks are connected with conveyors
 const bool checkConveyorSystem = false;//temporarily disabled because of a SE bug
 
+//Debug drawing in 3D (offline worlds, needs Digi's "(DevTool) Programmable Block DebugAPI" mod):
+//on the [PAM-Controller] PB it draws ships, traffic, docking area and hole grids; on the ships it
+//sends their flight target, camera rays and job grid to the controller to draw. Off on a server.
+const bool debugDraw = false;
+
 // ===== End of settings: don't edit below this line =====

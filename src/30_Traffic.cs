@@ -82,6 +82,13 @@ void UpdateTraffic()
     // idle ships send too: docked (their connector counts as taken) or hovering (an obstacle)
     if (++trafficTick < 3) return; // ~2 messages per second
     trafficTick = 0;
+    if (debugDraw) // for the controller's debug drawing: id;jobPos;left;down;target;rays
+    {
+        IGC.SendBroadcastMessage("[PAMDBG]", myGridId + ";" + VectorToString(jobPosition.position) + ";" +
+            VectorToString(jobState == JobState.NoJob ? new Vector3() : jobPosition.leftDir) + ";" + VectorToString(miningDown) + ";" +
+            VectorToString(navTargetPos + trafficShift) + ";" + String.Join(":", debugRays));
+        debugRays.Clear();
+    }
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
@@ -153,6 +160,7 @@ Vector3 GetLaneOffset(int idx, int pathDir)
 // ---- spacing ----
 
 Vector3 trafficMyVel = new Vector3();
+List<String> debugRays = new List<String>();
 
 // Docking, undocking and backing out of a hole: traffic only slows/holds the ship, no side step
 // (the ship has to stay on its line to the connector or hole).

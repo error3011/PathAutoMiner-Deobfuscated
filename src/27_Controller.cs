@@ -52,6 +52,7 @@ void ControllerMainLoop(string argument)
     if (isTick) UpdateJobCoordination(); // co-op jobs: hand out holes
     if (isTick) UpdateTrafficControl();  // all ships at once: who gives way
     if (isTick) UpdateStagedHome();      // "Move home" for all: one ship after the other
+    if (isTick && tcSendTick == 0) UpdateDebugDraw(); // 3D debug drawing (DebugAPI mod), twice a second
     UpdateControllerDisplays();
 }
 
