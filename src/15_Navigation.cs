@@ -90,6 +90,7 @@ void UpdateNavigation()
                 statusMessage = coopWaitAside ? "Waiting for a free hole" : "Waiting for the controller";
                 return;
             }
+            if (coopWaiting) statusMessage = ""; // got a hole: drop "Waiting for ..."
             coopWaiting = false;
             if (claimed != currentHoleIndex) { currentHoleIndex = claimed; maxMineDepth = 0; lastHoleIndex = currentHoleIndex; }
             SpiralResult result = SetHolePosition(currentHoleIndex);

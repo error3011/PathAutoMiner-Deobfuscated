@@ -65,7 +65,7 @@ const bool setLCDFontAndSize = true;
 //something is in the way (path flights and hole-to-hole moves; off while mining and docking).
 //A camera only scans within 45° of where it faces: add cameras facing every direction the ship travels.
 const bool obstacleBrake = true;
-const float obstacleLookAhead = 3f;//[s] scan distance = speed * this + ship size
+const float obstacleLookAhead = 3f;//[s] scan distance = speed * this + ship size (the sweep covers the ship's width)
 const float obstacleTimeout = 10f;//[s] show "Path blocked" after holding this long
 
 //Traffic between PAM ships (needs a working antenna; independent of Broadcast_Channel)
