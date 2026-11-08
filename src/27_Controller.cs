@@ -296,6 +296,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
         text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
     else text += GetShipStatusLine(selectedShip) + "\n";
     text += separator;
+    int headerLines = text.Split('\n').Length - 1; // title, docking area, jobs, traffic, separator: the list gets the rest
 
     int idx = 0;
     int sel = menuIndex;
@@ -330,7 +331,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
                 NavigateToMenu(MenuPage.ShipInventory);
             }
         }
-        int visibleLines = pageSize - 2;
+        int visibleLines = Math.Max(3, pageSize - headerLines);
         visibleLines += Math.Max(0, (pageOffset - 1)) * pageSize;
         text += ScrollText(visibleLines, list, selectedLine, ref scrollState);
     }
