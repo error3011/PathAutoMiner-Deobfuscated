@@ -8081,7 +8081,8 @@ void DrawJobMatrix(String param, Vector2 at, Vector2 size)
     int done = 0;
     for (int i = 0; i < job.done.Length; i++) if (job.done[i] == '1') done++;
     DText("Job " + n + ": " + done + "/" + job.done.Length + " holes done", at + new Vector2(size.X / 2, 4), Color.White, 0.9f, TextAlignment.CENTER);
-    float top = 40, bottom = 30;
+    int keyLines = (job.ships.Count + 1) / 2; // key under the grid: 2 ships per line
+    float top = 40, bottom = 30 + 20 * keyLines;
     float cell = Math.Min(size.X / job.w, (size.Y - top - bottom) / job.h);
     Vector2 origin = at + new Vector2((size.X - cell * job.w) / 2, top + (size.Y - top - bottom - cell * job.h) / 2);
     for (int c = 0; c < job.done.Length; c++)
@@ -8091,10 +8092,13 @@ void DrawJobMatrix(String param, Vector2 at, Vector2 size)
         Color col = job.done[c] == '1' ? new Color(90, 90, 90) : owner != null ? Color.Orange : new Color(30, 60, 90);
         DBox(ctr, new Vector2(cell * 0.9f, cell * 0.9f), col, "SquareSimple");
         if (owner == null) continue;
-        String nm = ShipName(owner.id);
-        DText(nm.Substring(Math.Max(0, nm.Length - 2)).Trim(), ctr - new Vector2(0, cell * 0.3f), Color.Black, Math.Min(1.2f, cell / 40), TextAlignment.CENTER);
+        DText("" + (job.ships.IndexOf(owner) + 1), ctr - new Vector2(0, cell * 0.3f), Color.Black, Math.Min(1.2f, cell / 40), TextAlignment.CENTER);
     }
-    DText("grey done | orange: ship working | blue free", at + new Vector2(size.X / 2, size.Y - 24), Color.Gray, 0.6f, TextAlignment.CENTER);
+    // key: the number in a square = the ship working it
+    for (int i = 0; i < job.ships.Count; i += 2)
+        DText((i + 1) + " " + ShipName(job.ships[i].id) + (i + 1 < job.ships.Count ? "    " + (i + 2) + " " + ShipName(job.ships[i + 1].id) : ""),
+            at + new Vector2(size.X / 2, size.Y - 26 - 20 * (keyLines - i / 2)), Color.Orange, 0.55f, TextAlignment.CENTER);
+    DText("grey done | orange: ship working (number) | blue free", at + new Vector2(size.X / 2, size.Y - 24), Color.Gray, 0.6f, TextAlignment.CENTER);
 }
 
 // side view: horizontal = distance from the station towards the job, vertical = real height above the
