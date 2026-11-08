@@ -443,8 +443,8 @@ void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
 
 // Renders one LCD. "main:<page>" pages share one scrolling list; firstPanel resets the page bookkeeping.
 // text lines that fit on a screen: its height (minus padding) over the line height at its font size
-// (~30 px per line at size 1.0 on a 512 px LCD)
-int LinesFor(IMyTextSurface s) { return Math.Max(5, (int)(s.SurfaceSize.Y * (1 - s.TextPadding / 50f) / (30f * Math.Max(0.1f, s.FontSize)))); }
+// (setting lcdLineHeight: pixels per line at size 1.0 on a 512 px LCD, ~30)
+int LinesFor(IMyTextSurface s) { return Math.Max(5, (int)(s.SurfaceSize.Y * (1 - s.TextPadding / 50f) / (Math.Max(5, lcdLineHeight) * Math.Max(0.1f, s.FontSize)))); }
 
 String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel, int linesPerPage)
 {
@@ -458,7 +458,6 @@ String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel,
     String text = "";
     if (mode == LCDMode.Fleet) return BuildFleetScreen();
     if (mode == LCDMode.Ship) return BuildShipScreen(param);
-    if (mode == LCDMode.Log) return BuildLogScreen();
     if (mode == LCDMode.MainPaged)
     {
         int page = 0;

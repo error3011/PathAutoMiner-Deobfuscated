@@ -193,6 +193,7 @@ The settings are in the **Custom Data of the programmable block**, in the `[PAM 
 | `followGap` | 1 | ship | x ship size: free space behind a PAM ship ahead |
 | `resumeAfterRestart` | true | ship | continue a running job after a server restart / world load |
 | `debugDraw` | false | both | 3D debug drawing (offline world + DebugAPI mod) |
+| `lcdLineHeight` | 30 | controller | pixels per text line at font size 1.0 (512 px LCD): sets how many lines the main / paged screens fit for each LCD's font size. Bottom line cut off: raise it; a spare line at the bottom: lower it |
 
 ## Multiple ships: obstacle brake, traffic and co-op mining
 
@@ -222,7 +223,7 @@ Besides the original modes (`main:<page>`, `mainX`, `menu`, `inventory`, `menu:<
 |---|---|---|
 | `fleet` | One line per ship: state, cargo %, battery %, hydrogen %, current hole, flags (`EMG` emergency, `QUEUE` waiting in the dock queue, `PARKED` landed / out of service, `WAIT` waiting, `GIVE` giving way, `CLEARED` cleared to dock). Docking-area status, jobs and traffic above it | Sets the Monospace font (if `setLCDFontAndSize` is on) so the columns line up; font size 0.5–0.6 on a normal LCD |
 | `ship:<name>` | One ship: state, status, cargo, battery / hydrogen / uranium, speed, job progress and hole, right of way, docking, flags, last contact | Corner LCDs work |
-| `log` | Coordination events, newest first, with the time: dock clearances, docked / left, connector failed, emergency, hole assigned / done, job done, who gives way to whom, staged "Move home" order, contact lost / back | The last 40 events; the same event again within 30 s is shown once |
+| `log` | Coordination events, newest first, with the time: dock clearances, docked / left, connector failed, emergency, hole assigned / done, job done, who gives way to whom, staged "Move home" order, contact lost / back | Drawn screen, coloured by kind: red emergency, coral connector failed / too slow, sky blue docking, orange holes / job, yellow giving way, violet staged "Move home", green contact, dark red contact lost; time in grey, long events wrapped. Text size = the LCD's font size (0.5–0.7 works well). The last 40 events; the same event again within 30 s is shown once |
 | `job:<n>` | Drawn hole matrix of job n: grey done, orange a ship working it (with the end of its name), blue free. Columns left to right, rows top to bottom, as seen from behind a ship drilling it | Drawn screen (redrawn about once a second) |
 | `map` | Drawn side view from the station towards the (first) job: recorded path, station, job site with its progress and height, ships (green moving, yellow giving way, violet waiting, grey parked, red emergency) with their height and a line where they're heading; height lines labelled in metres above the station | On a planet heights are real altitude (distance from the planet's centre, sent by the ships), so the curve of the planet doesn't tilt the view. Heights are stretched at most 5x (factor shown at the top). The terrain itself isn't known: the path shows how the ships fly over it. A wide LCD works best |
 

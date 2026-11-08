@@ -61,3 +61,4 @@ float followGap = 1f;
 bool resumeAfterRestart = true;
 const bool checkConveyorSystem = false; //temporarily disabled because of a SE bug
 bool debugDraw = false;
+float lcdLineHeight = 30f;

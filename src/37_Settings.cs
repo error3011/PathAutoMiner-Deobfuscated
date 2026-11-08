@@ -66,6 +66,7 @@ void LoadControllerSettings()
     zoneTag = CS("zoneTag", zoneTag);
     laneTag = CS("laneTag", laneTag);
     dockLaneLength = CF("dockLaneLength", dockLaneLength);
+    lcdLineHeight = CF("lcdLineHeight", lcdLineHeight);
 }
 
 // the setting's value from Custom Data (or the default), written back to the section

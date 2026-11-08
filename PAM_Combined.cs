@@ -62,6 +62,7 @@ float followGap = 1f;
 bool resumeAfterRestart = true;
 const bool checkConveyorSystem = false; //temporarily disabled because of a SE bug
 bool debugDraw = false;
+float lcdLineHeight = 30f;
 
 // ========================== 02_Enums.cs ==========================
 // ========================== ENUMS ==========================
@@ -5357,8 +5358,8 @@ void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
 
 // Renders one LCD. "main:<page>" pages share one scrolling list; firstPanel resets the page bookkeeping.
 // text lines that fit on a screen: its height (minus padding) over the line height at its font size
-// (~30 px per line at size 1.0 on a 512 px LCD)
-int LinesFor(IMyTextSurface s) { return Math.Max(5, (int)(s.SurfaceSize.Y * (1 - s.TextPadding / 50f) / (30f * Math.Max(0.1f, s.FontSize)))); }
+// (setting lcdLineHeight: pixels per line at size 1.0 on a 512 px LCD, ~30)
+int LinesFor(IMyTextSurface s) { return Math.Max(5, (int)(s.SurfaceSize.Y * (1 - s.TextPadding / 50f) / (Math.Max(5, lcdLineHeight) * Math.Max(0.1f, s.FontSize)))); }
 
 String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel, int linesPerPage)
 {
@@ -5372,7 +5373,6 @@ String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel,
     String text = "";
     if (mode == LCDMode.Fleet) return BuildFleetScreen();
     if (mode == LCDMode.Ship) return BuildShipScreen(param);
-    if (mode == LCDMode.Log) return BuildLogScreen();
     if (mode == LCDMode.MainPaged)
     {
         int page = 0;
@@ -7783,6 +7783,7 @@ void LoadControllerSettings()
     zoneTag = CS("zoneTag", zoneTag);
     laneTag = CS("laneTag", laneTag);
     dockLaneLength = CF("dockLaneLength", dockLaneLength);
+    lcdLineHeight = CF("lcdLineHeight", lcdLineHeight);
 }
 
 // the setting's value from Custom Data (or the default), written back to the section
@@ -7822,7 +7823,8 @@ String SettingsBlock()
 // Extra LCD modes (Custom Data "mode=..."):
 //   fleet          one line per ship: state, cargo, energy, hole, flags; docking area and jobs
 //   ship:<name>    one ship in detail
-//   log            coordination events (docking, holes, giving way, emergencies, contact), newest first
+//   log            coordination events (docking, holes, giving way, emergencies, contact), newest first,
+//                  coloured by kind (drawn; text size = the LCD's font size)
 //   job:<n>        hole matrix of job n (drawn, as seen behind a ship drilling it)
 //   map            side view base -> job: path, job site, ships (drawn; wide LCD recommended)
 // The drawn ones redraw about once a second.
@@ -7868,7 +7870,7 @@ void UpdateScreens()
     }
 }
 
-bool SpriteMode(LCDMode m) { return m == LCDMode.Map || m == LCDMode.Job; }
+bool SpriteMode(LCDMode m) { return m == LCDMode.Map || m == LCDMode.Job || m == LCDMode.Log; }
 
 String ShortState(String s)
 {
@@ -7944,12 +7946,48 @@ String BuildShipScreen(String name)
     return text;
 }
 
-String BuildLogScreen()
+// colour of a log event by its kind
+Color LogColor(String msg)
 {
-    String text = "Coordination log (newest first)\n" + "—————————————————————\n";
-    for (int i = 0; i < logLines.Count; i++) text += logLines[i] + "\n";
-    if (logLines.Count == 0) text += "(nothing yet)\n";
-    return text;
+    if (msg.StartsWith("EMERGENCY")) return Color.Red;
+    if (msg.Contains("couldn't lock") || msg.Contains("too slow")) return Color.Coral;
+    if (msg.StartsWith("Dock:")) return Color.SkyBlue;
+    if (msg.StartsWith("Job:")) return Color.Orange;
+    if (msg.StartsWith("Traffic:")) return Color.Yellow;
+    if (msg.StartsWith("Move home:")) return Color.Violet;
+    if (msg.StartsWith("Contact lost")) return Color.IndianRed;
+    if (msg.StartsWith("Contact")) return Color.LimeGreen;
+    return Color.White;
+}
+
+// log: time in grey, the event in its colour, long events wrapped; text size = the LCD's font size
+void DrawLog(IMyTextPanel p, Vector2 at, Vector2 size)
+{
+    float sc = Math.Max(0.3f, p.FontSize), pad = 6, bottom = at.Y + size.Y;
+    StringBuilder sb = new StringBuilder();
+    Func<String, float> W = s => p.MeasureStringInPixels(sb.Clear().Append(s), "Debug", sc).X;
+    float lh = p.MeasureStringInPixels(sb.Clear().Append("Ag"), "Debug", sc).Y, y = at.Y + pad;
+    DText("Coordination log (newest first)", new Vector2(at.X + pad, y), Color.White, sc, TextAlignment.LEFT);
+    y += lh * 1.3f;
+    if (logLines.Count == 0) DText("(nothing yet)", new Vector2(at.X + pad, y), Color.Gray, sc, TextAlignment.LEFT);
+    for (int i = 0; i < logLines.Count && y + lh <= bottom; i++)
+    {
+        String time = logLines[i].Substring(0, 9), msg = logLines[i].Substring(9), line = "";
+        Color c = LogColor(msg);
+        DText(time, new Vector2(at.X + pad, y), Color.Gray, sc, TextAlignment.LEFT);
+        float x = at.X + pad + W(time), width = at.X + size.X - pad - x;
+        foreach (String w in msg.Split(' '))
+        {
+            String t = line == "" ? w : line + " " + w;
+            if (line == "" || W(t) <= width) { line = t; continue; }
+            DText(line, new Vector2(x, y), c, sc, TextAlignment.LEFT);
+            y += lh;
+            line = w;
+            if (y + lh > bottom) { line = ""; break; }
+        }
+        if (line != "") DText(line, new Vector2(x, y), c, sc, TextAlignment.LEFT);
+        y += lh;
+    }
 }
 
 // ---- drawing ----
@@ -7979,6 +8017,7 @@ void DrawSpriteScreen(IMyTextPanel p, LCDMode mode, String param)
     Vector2 size = p.SurfaceSize, at = (p.TextureSize - size) / 2;
     drawFrame = p.DrawFrame();
     if (mode == LCDMode.Job) DrawJobMatrix(param, at, size);
+    else if (mode == LCDMode.Log) DrawLog(p, at, size);
     else DrawSideMap(at, size);
     drawFrame.Dispose();
 }
