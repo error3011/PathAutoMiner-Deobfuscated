@@ -375,7 +375,13 @@ void UpdateNavigation()
         // to where it came down from, then on
         if (currentNavState == NavState.FlyToDockArea && emgStage > 0 && ++emgFree > 3)
         {
-            if (emgStage < 3) { emgStage = 3; SetBlocksEnabled(thrusters, true); SetLandingGears(landingGears, false); AlignToDown(downDirection, forwardDirection, leftDirection, true); }
+            if (emgStage < 3)
+            {
+                emgStage = 3; SetBlocksEnabled(thrusters, true); SetLandingGears(landingGears, false); AlignToDown(downDirection, forwardDirection, leftDirection, true);
+                // came down where it was (e.g. after a restart): climb at least one ship size first
+                Vector3 g = remoteControl.GetNaturalGravity();
+                if (Vector3.Distance(shipPosition, emgStart) < shipDiameter && g.LengthSquared() > 0.01f) emgStart = shipPosition - Vector3.Normalize(g) * shipDiameter;
+            }
             SetFlightTarget(emgStart, 5);
             if (distToTarget > wpReachedDist) { statusMessage = "Emergency: taking off"; return; }
             emgStage = 0;
@@ -508,6 +514,8 @@ void UpdateNavigation()
         // already at (or docked to) the connector: dock, whatever else is going on (e.g. job started while docked)
         if (FindConnector(MyShipConnectorStatus.Connectable) != null || FindConnector(MyShipConnectorStatus.Connected) != null)
         { SetNavState(NavState.Docking); return; }
+        // close to the lane entry: hold the heading (the direction to a point that close swings about)
+        if (toLane && lookAtTarget && distToTarget < 5 && distToTarget != -1) AlignToDown(downDirection, forwardDirection, leftDirection, true);
         if (toLane && distToTarget < wpReachedDist && distToTarget != -1)
         {
             toLane = false; laneTurn = true; stuckCounter = 0;
@@ -519,7 +527,7 @@ void UpdateNavigation()
         {
             statusMessage = "Docking: turning at the lane";
             if (!isAligned && ++stuckCounter < 48) return; // at most 8 s (weak gyros, heavy cargo): then on anyway
-            laneTurn = false;
+            laneTurn = false; statusMessage = "";
             GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos);
             SetFlightTarget(navTargetPos, 0);
             return;
@@ -536,9 +544,8 @@ void UpdateNavigation()
             // the connector didn't lock 3 times: leave it, ask for another one
             if (dockTries >= 3 && shipMode != ShipMode.Shuttle)
             {
-                badDocks.Add(poolDock != null ? poolDockId : homeConnId);
+                badDocks.Add(poolDock != null ? poolDockId : homeConnId); // keeps asking: the station drops that clearance, the ship keeps its place
                 dockTries = 0;
-                ReleaseDock();
                 SetNavState(NavState.FlyToDockArea);
                 statusMessage = "Docking failed: trying another connector";
                 return;

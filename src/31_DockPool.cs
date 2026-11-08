@@ -60,8 +60,8 @@ int DockPhase()
     if (s == NavState.Idle) return FindConnector(MyShipConnectorStatus.Connected) != null ? 3 : 0; // idle but docked still holds the connector
     if (s == NavState.Docking || s == NavState.Unloading || s == NavState.Charging || s == NavState.WaitUranium ||
         s == NavState.FillHydrogen || s == NavState.Undocking) return 3;
-    // last leg: in the connector's lane (the station clears the next ship from here)
-    if ((s == NavState.ApproachDock && !toLane) || s == NavState.AlignDock || s == NavState.RetryDocking) return 2;
+    // last leg: turned round in the connector's lane (the station clears the next ship from here)
+    if ((s == NavState.ApproachDock && !toLane && !laneTurn) || s == NavState.AlignDock || s == NavState.RetryDocking) return 2; // after the turn at the lane
     if (s == NavState.FlyToDockArea || s == NavState.ApproachDock) return 1;
     return 0;
 }

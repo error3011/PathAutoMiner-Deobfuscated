@@ -991,34 +991,11 @@ void ProcessShipArgument(string argument)
 
 String GetHelpText()
 {
-    String text = "\n\n" + "Run-arguments: (Type without:[ ])\n" + "———————————————\n" +
-        "[UP] Menu navigation up\n" + "[DOWN] Menu navigation down\n" + "[APPLY] Apply menu point\n\n" +
-        "[UPLOOP] \"UP\" + looping\n" + "[DOWNLOOP] \"DOWN\" + looping\n" +
-        "[PATHHOME] Record path, set home\n" + "[PATH] Record path, use old home\n" +
-        "[START] Start job\n" + "[STOP] Stop every process\n" + "[CONT] Continue last job\n" +
-        "[JOBPOS] Move to job position\n" + "[HOMEPOS] Move to home position\n\n" +
-        "[FULL] Simulate ship is full\n" + "[ALIGN] Align the ship to planet\n" + "[RESET] Reset all data\n" +
-        "[EXPORT] Save path+job to " + dataTag + "\n" + "[IMPORT] Load path+job from " + dataTag + "\n" + "[IMPORT JOB] Load only the job (co-op)\n";
-
-    if (shipMode != ShipMode.Shuttle)
-        text += "[SHUTTLE] Enable shuttle mode\n" + "[NEXT] Next hole\n" + "[PREV] Previous hole\n\n" +
-            "[CFGS width height depth]*\n" + "[CFGB done damage]*\n" + "[CFGL maxload weightLimit]*\n" +
-            "[CFGE minUr minBat minHyd]*\n" + "[CFGW forward backward]*\n" + "[CFGA acceleration]*\n" +
-            "———————————————\n" +
-            "*[CFGS] = Config Size:\n" + " e.g.: \"CFGS 5 3 20\"\n\n" +
-            "*[CFGB] = Config Behaviour:\n" + " When done: [HOME,STOP]\n" + " On Damage: [HOME,JOB,STOP,IG]\n" +
-            " e.g.: \"CFGB HOME IG\"\n\n" +
-            "*[CFGL] = Config max load:\n" + " maxload: [10..95]\n" + " weight limit: [On/Off]\n" +
-            " e.g.: \"CFGL 70 on\"\n\n" +
-            "*[CFGE] = Config energy:\n" + " minUr (Uranium): [1..25, IG]\n" + " minBat (Battery): [5..30, IG]\n" +
-            " minHyd (Hydrogen): [10..90, IG]\n" + " e.g.: \"CFGE 20 10 IG\"\n\n" +
-            "*[CFGW] = Config work speed:\n" + " fwd: [0.5..10]\n" + " bwd: [0.5..10]\n" +
-            " e.g.: \"CFGW 1.5 2\"\n\n" +
-            "*[CFGA] = Config acceleration:\n" + " acceleration: [10..100]\n" + " e.g.: \"CFGA 80\"\n";
-    else
-        text += "[UNDOCK] Leave current connector\n\n";
-
-    return text;
+    // short list: what each one does and the CFG values are in the README ("Run arguments")
+    return "\n\nRun-arguments (details: README):\n" +
+        "UP DOWN APPLY UPLOOP DOWNLOOP\nPATHHOME PATH START STOP CONT\nJOBPOS HOMEPOS FULL ALIGN RESET\n" +
+        "EXPORT IMPORT \"IMPORT JOB\"\n" +
+        (shipMode != ShipMode.Shuttle ? "SHUTTLE NEXT PREV\nCFGS w h depth | CFGB done damage\nCFGL maxload limit | CFGE ur bat hyd\nCFGW fwd bwd | CFGA accel\n" : "UNDOCK\n");
 }
 
 // ========================== 09_ShuttleConfig.cs ==========================
@@ -1920,7 +1897,7 @@ void ContinueJob()
     }
     else
     {
-        if (jobState != JobState.Paused && jobState != JobState.Changed) return;
+        if (jobState != JobState.Paused && jobState != JobState.Changed && jobState != JobState.Active) return; // active: re-plans from where it is (e.g. stuck)
         bool wasChanged = jobState == JobState.Changed;
         StartJobCommon();
         bool hasDock = IsShipFull(false) && homeDock.isSet;
@@ -1929,7 +1906,11 @@ void ContinueJob()
         {
             case LocationType.AtJob: SetNavState(hasDock ? NavState.FlyToPath : NavState.FlyToXY); break;
             case LocationType.OnPath: SetNavState(hasDock ? NavState.FlyToDockArea : NavState.FlyToJobArea); break;
-            case LocationType.AtHomeDock: SetNavState(hasDock ? NavState.ApproachDock : NavState.Unloading); break;
+            // near home but not at the connector: to the docking area (asks the station, docks) instead of unloading
+            case LocationType.AtHomeDock:
+                SetNavState(FindConnector(MyShipConnectorStatus.Connected) == null && FindConnector(MyShipConnectorStatus.Connectable) == null ? NavState.FlyToDockArea :
+                    hasDock ? NavState.ApproachDock : NavState.Unloading);
+                break;
             case LocationType.AtMine:
             {
                 if (lastHoleIndex != currentHoleIndex || wasChanged) SetNavState(NavState.Returning);
@@ -2414,7 +2395,13 @@ void UpdateNavigation()
         // to where it came down from, then on
         if (currentNavState == NavState.FlyToDockArea && emgStage > 0 && ++emgFree > 3)
         {
-            if (emgStage < 3) { emgStage = 3; SetBlocksEnabled(thrusters, true); SetLandingGears(landingGears, false); AlignToDown(downDirection, forwardDirection, leftDirection, true); }
+            if (emgStage < 3)
+            {
+                emgStage = 3; SetBlocksEnabled(thrusters, true); SetLandingGears(landingGears, false); AlignToDown(downDirection, forwardDirection, leftDirection, true);
+                // came down where it was (e.g. after a restart): climb at least one ship size first
+                Vector3 g = remoteControl.GetNaturalGravity();
+                if (Vector3.Distance(shipPosition, emgStart) < shipDiameter && g.LengthSquared() > 0.01f) emgStart = shipPosition - Vector3.Normalize(g) * shipDiameter;
+            }
             SetFlightTarget(emgStart, 5);
             if (distToTarget > wpReachedDist) { statusMessage = "Emergency: taking off"; return; }
             emgStage = 0;
@@ -2547,6 +2534,8 @@ void UpdateNavigation()
         // already at (or docked to) the connector: dock, whatever else is going on (e.g. job started while docked)
         if (FindConnector(MyShipConnectorStatus.Connectable) != null || FindConnector(MyShipConnectorStatus.Connected) != null)
         { SetNavState(NavState.Docking); return; }
+        // close to the lane entry: hold the heading (the direction to a point that close swings about)
+        if (toLane && lookAtTarget && distToTarget < 5 && distToTarget != -1) AlignToDown(downDirection, forwardDirection, leftDirection, true);
         if (toLane && distToTarget < wpReachedDist && distToTarget != -1)
         {
             toLane = false; laneTurn = true; stuckCounter = 0;
@@ -2558,7 +2547,7 @@ void UpdateNavigation()
         {
             statusMessage = "Docking: turning at the lane";
             if (!isAligned && ++stuckCounter < 48) return; // at most 8 s (weak gyros, heavy cargo): then on anyway
-            laneTurn = false;
+            laneTurn = false; statusMessage = "";
             GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos);
             SetFlightTarget(navTargetPos, 0);
             return;
@@ -2575,9 +2564,8 @@ void UpdateNavigation()
             // the connector didn't lock 3 times: leave it, ask for another one
             if (dockTries >= 3 && shipMode != ShipMode.Shuttle)
             {
-                badDocks.Add(poolDock != null ? poolDockId : homeConnId);
+                badDocks.Add(poolDock != null ? poolDockId : homeConnId); // keeps asking: the station drops that clearance, the ship keeps its place
                 dockTries = 0;
-                ReleaseDock();
                 SetNavState(NavState.FlyToDockArea);
                 statusMessage = "Docking failed: trying another connector";
                 return;
@@ -5942,7 +5930,7 @@ float JobRadius() { return 0.5f * (float)Math.Sqrt(Math.Pow(jobWidth * JTW(), 2)
 
 bool NearJobArea() { return JobKey() != "" && Vector3.Distance(shipPosition, jobPosition.position) < JobRadius() + shipDiameter * 2; }
 
-// right of way: 3 emergency (low on energy, on the way to dock), 2 heading home (anywhere: backing out
+// right of way: 3 emergency (low on energy, on the way to dock) or docking / undocking, 2 heading home (anywhere: backing out
 // to go home, flying to the path, on the path home), 1 moving between holes or arriving at the job
 // area, 0 other (e.g. on the way to the job), -1 waiting where it is (for a hole, clearance, a dock)
 bool HeadingHome() { NavState s = currentNavState; return s == NavState.ReturnToDock || s == NavState.FlyToPath || s == NavState.FlyToDockArea; }
@@ -5951,7 +5939,8 @@ int TrafficPrio()
 {
     NavState s = currentNavState;
     if (waitingHere) return -1; // waiting (for a hole, dock clearance, a free dock): everyone else goes first
-    if (emergency) return 3;    // low on energy, on its way to dock
+    // low on energy on its way to dock, or cleared and docking / undocking in the docking area
+    if (emergency || s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.Docking || s == NavState.RetryDocking || s == NavState.Undocking) return 3;
     if (HeadingHome()) return 2;
     return s == NavState.FlyToXY || s == NavState.Returning || s == NavState.FlyToDropPos || (s == NavState.FlyToJobArea && NearJobArea()) ? 1 : 0;
 }
@@ -6012,7 +6001,8 @@ void UpdateTrafficAvoidance()
     trafficShift = new Vector3();
     trafficSpeedLimit = -1;
     trafficHeading = new Vector3();
-    bool free = IsFreeFlightState(currentNavState);
+    // in a connector's lane (pool connector too): precise, holds only (no side steps, no moving aside)
+    bool free = IsFreeFlightState(currentNavState) && !(currentNavState == NavState.ApproachDock && !toLane);
     if (!trafficEnabled || (!free && !IsPreciseFlightState(currentNavState))) { trafficHolding = false; return; }
     trafficMyVel = remoteControl.GetShipVelocities().LinearVelocity;
     ComputeTrafficAvoidance(remoteControl.GetNaturalGravity(), !free);
@@ -6411,8 +6401,8 @@ int DockPhase()
     if (s == NavState.Idle) return FindConnector(MyShipConnectorStatus.Connected) != null ? 3 : 0; // idle but docked still holds the connector
     if (s == NavState.Docking || s == NavState.Unloading || s == NavState.Charging || s == NavState.WaitUranium ||
         s == NavState.FillHydrogen || s == NavState.Undocking) return 3;
-    // last leg: in the connector's lane (the station clears the next ship from here)
-    if ((s == NavState.ApproachDock && !toLane) || s == NavState.AlignDock || s == NavState.RetryDocking) return 2;
+    // last leg: turned round in the connector's lane (the station clears the next ship from here)
+    if ((s == NavState.ApproachDock && !toLane && !laneTurn) || s == NavState.AlignDock || s == NavState.RetryDocking) return 2; // after the turn at the lane
     if (s == NavState.FlyToDockArea || s == NavState.ApproachDock) return 1;
     return 0;
 }
@@ -6713,6 +6703,10 @@ void HandleDockMessage(String data)
             r.usable = f.Length >= 6 ? "," + f[5] + "," : null;
             r.bad = f.Length >= 7 ? "," + f[6] + "," : "";
             r.emg = f.Length >= 8 && f[7] == "1";
+            // its connector didn't lock: drop that clearance, the request (and its place in the queue) stays
+            int d = dockingShips.IndexOf(r.ship);
+            if (d >= 0 && r.bad.Contains("," + dockingConns[d] + ",")) { dockingShips.RemoveAt(d); dockingConns.RemoveAt(d); }
+            if (clearedShip == r.ship && r.bad.Contains("," + clearedConn + ",")) clearedShip = 0;
         }
     }
     catch { }
@@ -6807,7 +6801,7 @@ int emgTicks = 0, emgStill = 0, emgFree = 0;
 Vector3 emgStart = new Vector3();
 
 bool StationHandlesMe() { return dockRequestKind != 0 && (TimeNow() - stationAckTime).TotalSeconds < 3; }
-bool StationCleared(int kind) { return StationHandlesMe() && stationCleared == myGridId && stationClearedKind == kind; }
+bool StationCleared(int kind) { return StationHandlesMe() && stationCleared == myGridId && stationClearedKind == kind && !badDocks.Contains(stationConn); }
 // still waiting for a first answer, or the station is handling this ship
 bool StationDeciding() { return StationHandlesMe() || (TimeNow() - dockRequestSince).TotalSeconds < 3; }
 

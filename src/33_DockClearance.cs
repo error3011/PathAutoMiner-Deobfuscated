@@ -25,7 +25,7 @@ int emgTicks = 0, emgStill = 0, emgFree = 0;
 Vector3 emgStart = new Vector3();
 
 bool StationHandlesMe() { return dockRequestKind != 0 && (TimeNow() - stationAckTime).TotalSeconds < 3; }
-bool StationCleared(int kind) { return StationHandlesMe() && stationCleared == myGridId && stationClearedKind == kind; }
+bool StationCleared(int kind) { return StationHandlesMe() && stationCleared == myGridId && stationClearedKind == kind && !badDocks.Contains(stationConn); }
 // still waiting for a first answer, or the station is handling this ship
 bool StationDeciding() { return StationHandlesMe() || (TimeNow() - dockRequestSince).TotalSeconds < 3; }
 

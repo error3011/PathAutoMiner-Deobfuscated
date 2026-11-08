@@ -191,7 +191,7 @@ float JobRadius() { return 0.5f * (float)Math.Sqrt(Math.Pow(jobWidth * JTW(), 2)
 
 bool NearJobArea() { return JobKey() != "" && Vector3.Distance(shipPosition, jobPosition.position) < JobRadius() + shipDiameter * 2; }
 
-// right of way: 3 emergency (low on energy, on the way to dock), 2 heading home (anywhere: backing out
+// right of way: 3 emergency (low on energy, on the way to dock) or docking / undocking, 2 heading home (anywhere: backing out
 // to go home, flying to the path, on the path home), 1 moving between holes or arriving at the job
 // area, 0 other (e.g. on the way to the job), -1 waiting where it is (for a hole, clearance, a dock)
 bool HeadingHome() { NavState s = currentNavState; return s == NavState.ReturnToDock || s == NavState.FlyToPath || s == NavState.FlyToDockArea; }
@@ -200,7 +200,8 @@ int TrafficPrio()
 {
     NavState s = currentNavState;
     if (waitingHere) return -1; // waiting (for a hole, dock clearance, a free dock): everyone else goes first
-    if (emergency) return 3;    // low on energy, on its way to dock
+    // low on energy on its way to dock, or cleared and docking / undocking in the docking area
+    if (emergency || s == NavState.ApproachDock || s == NavState.AlignDock || s == NavState.Docking || s == NavState.RetryDocking || s == NavState.Undocking) return 3;
     if (HeadingHome()) return 2;
     return s == NavState.FlyToXY || s == NavState.Returning || s == NavState.FlyToDropPos || (s == NavState.FlyToJobArea && NearJobArea()) ? 1 : 0;
 }
@@ -261,7 +262,8 @@ void UpdateTrafficAvoidance()
     trafficShift = new Vector3();
     trafficSpeedLimit = -1;
     trafficHeading = new Vector3();
-    bool free = IsFreeFlightState(currentNavState);
+    // in a connector's lane (pool connector too): precise, holds only (no side steps, no moving aside)
+    bool free = IsFreeFlightState(currentNavState) && !(currentNavState == NavState.ApproachDock && !toLane);
     if (!trafficEnabled || (!free && !IsPreciseFlightState(currentNavState))) { trafficHolding = false; return; }
     trafficMyVel = remoteControl.GetShipVelocities().LinearVelocity;
     ComputeTrafficAvoidance(remoteControl.GetNaturalGravity(), !free);

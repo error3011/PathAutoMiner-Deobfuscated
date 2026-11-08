@@ -182,6 +182,10 @@ void HandleDockMessage(String data)
             r.usable = f.Length >= 6 ? "," + f[5] + "," : null;
             r.bad = f.Length >= 7 ? "," + f[6] + "," : "";
             r.emg = f.Length >= 8 && f[7] == "1";
+            // its connector didn't lock: drop that clearance, the request (and its place in the queue) stays
+            int d = dockingShips.IndexOf(r.ship);
+            if (d >= 0 && r.bad.Contains("," + dockingConns[d] + ",")) { dockingShips.RemoveAt(d); dockingConns.RemoveAt(d); }
+            if (clearedShip == r.ship && r.bad.Contains("," + clearedConn + ",")) clearedShip = 0;
         }
     }
     catch { }

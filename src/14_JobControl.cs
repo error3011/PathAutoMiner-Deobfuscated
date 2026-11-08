@@ -197,7 +197,7 @@ void ContinueJob()
     }
     else
     {
-        if (jobState != JobState.Paused && jobState != JobState.Changed) return;
+        if (jobState != JobState.Paused && jobState != JobState.Changed && jobState != JobState.Active) return; // active: re-plans from where it is (e.g. stuck)
         bool wasChanged = jobState == JobState.Changed;
         StartJobCommon();
         bool hasDock = IsShipFull(false) && homeDock.isSet;
@@ -206,7 +206,11 @@ void ContinueJob()
         {
             case LocationType.AtJob: SetNavState(hasDock ? NavState.FlyToPath : NavState.FlyToXY); break;
             case LocationType.OnPath: SetNavState(hasDock ? NavState.FlyToDockArea : NavState.FlyToJobArea); break;
-            case LocationType.AtHomeDock: SetNavState(hasDock ? NavState.ApproachDock : NavState.Unloading); break;
+            // near home but not at the connector: to the docking area (asks the station, docks) instead of unloading
+            case LocationType.AtHomeDock:
+                SetNavState(FindConnector(MyShipConnectorStatus.Connected) == null && FindConnector(MyShipConnectorStatus.Connectable) == null ? NavState.FlyToDockArea :
+                    hasDock ? NavState.ApproachDock : NavState.Unloading);
+                break;
             case LocationType.AtMine:
             {
                 if (lastHoleIndex != currentHoleIndex || wasChanged) SetNavState(NavState.Returning);

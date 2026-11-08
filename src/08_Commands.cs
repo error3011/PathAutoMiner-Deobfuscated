@@ -81,32 +81,9 @@ void ProcessShipArgument(string argument)
 
 String GetHelpText()
 {
-    String text = "\n\n" + "Run-arguments: (Type without:[ ])\n" + "———————————————\n" +
-        "[UP] Menu navigation up\n" + "[DOWN] Menu navigation down\n" + "[APPLY] Apply menu point\n\n" +
-        "[UPLOOP] \"UP\" + looping\n" + "[DOWNLOOP] \"DOWN\" + looping\n" +
-        "[PATHHOME] Record path, set home\n" + "[PATH] Record path, use old home\n" +
-        "[START] Start job\n" + "[STOP] Stop every process\n" + "[CONT] Continue last job\n" +
-        "[JOBPOS] Move to job position\n" + "[HOMEPOS] Move to home position\n\n" +
-        "[FULL] Simulate ship is full\n" + "[ALIGN] Align the ship to planet\n" + "[RESET] Reset all data\n" +
-        "[EXPORT] Save path+job to " + dataTag + "\n" + "[IMPORT] Load path+job from " + dataTag + "\n" + "[IMPORT JOB] Load only the job (co-op)\n";
-
-    if (shipMode != ShipMode.Shuttle)
-        text += "[SHUTTLE] Enable shuttle mode\n" + "[NEXT] Next hole\n" + "[PREV] Previous hole\n\n" +
-            "[CFGS width height depth]*\n" + "[CFGB done damage]*\n" + "[CFGL maxload weightLimit]*\n" +
-            "[CFGE minUr minBat minHyd]*\n" + "[CFGW forward backward]*\n" + "[CFGA acceleration]*\n" +
-            "———————————————\n" +
-            "*[CFGS] = Config Size:\n" + " e.g.: \"CFGS 5 3 20\"\n\n" +
-            "*[CFGB] = Config Behaviour:\n" + " When done: [HOME,STOP]\n" + " On Damage: [HOME,JOB,STOP,IG]\n" +
-            " e.g.: \"CFGB HOME IG\"\n\n" +
-            "*[CFGL] = Config max load:\n" + " maxload: [10..95]\n" + " weight limit: [On/Off]\n" +
-            " e.g.: \"CFGL 70 on\"\n\n" +
-            "*[CFGE] = Config energy:\n" + " minUr (Uranium): [1..25, IG]\n" + " minBat (Battery): [5..30, IG]\n" +
-            " minHyd (Hydrogen): [10..90, IG]\n" + " e.g.: \"CFGE 20 10 IG\"\n\n" +
-            "*[CFGW] = Config work speed:\n" + " fwd: [0.5..10]\n" + " bwd: [0.5..10]\n" +
-            " e.g.: \"CFGW 1.5 2\"\n\n" +
-            "*[CFGA] = Config acceleration:\n" + " acceleration: [10..100]\n" + " e.g.: \"CFGA 80\"\n";
-    else
-        text += "[UNDOCK] Leave current connector\n\n";
-
-    return text;
+    // short list: what each one does and the CFG values are in the README ("Run arguments")
+    return "\n\nRun-arguments (details: README):\n" +
+        "UP DOWN APPLY UPLOOP DOWNLOOP\nPATHHOME PATH START STOP CONT\nJOBPOS HOMEPOS FULL ALIGN RESET\n" +
+        "EXPORT IMPORT \"IMPORT JOB\"\n" +
+        (shipMode != ShipMode.Shuttle ? "SHUTTLE NEXT PREV\nCFGS w h depth | CFGB done damage\nCFGL maxload limit | CFGE ur bat hyd\nCFGW fwd bwd | CFGA accel\n" : "UNDOCK\n");
 }
