@@ -310,6 +310,8 @@ void UpdateSensor(bool showOnHUD, bool detect, float frontRange, float backRange
     sensor.DetectNeutral = true;
 }
 
+HashSet<IMyTextSurface> lcdFormatted = new HashSet<IMyTextSurface>();
+
 void SetLCDFormat<T>(List<T> list, bool setFont, float fontSize, bool isSurface)
 {
     for (int i = 0; i < list.Count; i++)
@@ -319,7 +321,7 @@ void SetLCDFormat<T>(List<T> list, bool setFont, float fontSize, bool isSurface)
         if (surface != null)
         {
             surface.ContentType = ContentType.TEXT_AND_IMAGE;
-            if (!setFont) continue;
+            if (!setFont || !lcdFormatted.Add(surface)) continue; // font / size only the first time: then your own settings stay
             surface.Font = "Debug";
             if (isSurface) continue;
             surface.FontSize = fontSize;

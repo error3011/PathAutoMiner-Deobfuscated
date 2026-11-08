@@ -11,6 +11,8 @@ List<String> logLines = new List<String>();
 List<DateTime> logTimes = new List<DateTime>();
 Dictionary<long, String> shipPaths = new Dictionary<long, String>(); // grid id -> recorded path "x|y|z:..."
 IMyBroadcastListener pathListener = null;
+Vector3 planetCenter = new Vector3();
+bool hasPlanet = false;
 int screenTick = 0;
 
 void AddLog(String msg)
@@ -38,9 +40,11 @@ void UpdateScreens()
     {
         String data = pathListener.AcceptMessage().Data as String;
         if (data == null) continue;
-        int k = data.IndexOf(';');
+        String[] f = data.Split(';');
         long id;
-        if (k > 0 && long.TryParse(data.Substring(0, k), out id)) shipPaths[id] = data.Substring(k + 1);
+        if (f.Length < 2 || !long.TryParse(f[0], out id)) continue;
+        shipPaths[id] = f[1];
+        if (f.Length >= 3 && f[2] != "") { planetCenter = StringToVector(f[2]); hasPlanet = true; } // id;path;planet centre
     }
 }
 
@@ -182,48 +186,61 @@ void DrawJobMatrix(String param, Vector2 at, Vector2 size)
     DText("grey done | orange: ship working | blue free", at + new Vector2(size.X / 2, size.Y - 24), Color.Gray, 0.6f, TextAlignment.CENTER);
 }
 
-// side view: horizontal = distance from the station towards the job, vertical = height (gravity),
-// each with its own scale (heights are exaggerated to be readable)
+// side view: horizontal = distance from the station towards the job, vertical = real height above the
+// station (on a planet: distance from its centre, so the curve of the planet doesn't tilt it), labelled
+// in metres; heights stretched at most 5x to stay readable
 void DrawSideMap(Vector2 at, Vector2 size)
 {
     Vector3 o = Me.GetPosition();
     Vector3 up = new Vector3();
-    for (int i = 0; i < tcShips.Count; i++) up += tcShips[i].up;
+    if (hasPlanet) up = o - planetCenter;
+    else for (int i = 0; i < tcShips.Count; i++) up += tcShips[i].up;
     if (up.LengthSquared() < 0.01f) up = Me.WorldMatrix.Up;
     up.Normalize();
+    float rO = Vector3.Distance(o, planetCenter);
+    Func<Vector3, float> H = v => hasPlanet ? Vector3.Distance(v, planetCenter) - rO : Vector3.Dot(v - o, up);
     // towards the first job (else the far end of a path, else the first ship)
     Vector3 far = o;
-    if (jobs.Count > 0) { String[] k = jobs[0].key.Split('|'); far = new Vector3(float.Parse(k[0]), float.Parse(k[1]), float.Parse(k[2])); }
+    if (jobs.Count > 0) far = JobPos(jobs[0]);
     List<Vector3> pts = new List<Vector3>();
-    foreach (String ps in shipPaths.Values) { pts.Clear(); foreach (String w in ps.Split(':')) if (w != "") pts.Add(StringToVector(w)); break; }
+    foreach (String ps in shipPaths.Values) { foreach (String w in ps.Split(':')) if (w != "") pts.Add(StringToVector(w)); break; }
     if (far == o && pts.Count > 0) far = Vector3.Distance(pts[0], o) > Vector3.Distance(pts[pts.Count - 1], o) ? pts[0] : pts[pts.Count - 1];
     if (far == o && tcShips.Count > 0) far = tcShips[0].pos;
     Vector3 along = far - o - up * Vector3.Dot(far - o, up);
     if (along.LengthSquared() < 1) along = Vector3.Cross(up, Me.WorldMatrix.Right);
     along.Normalize();
     // bounds
-    float x0 = 0, x1 = 20, y0 = -10, y1 = 10;
+    float x0 = 0, x1 = 20, y0 = 0, y1 = 10;
     List<Vector3> all = new List<Vector3>(pts);
     all.Add(far);
     for (int i = 0; i < tcShips.Count; i++) all.Add(tcShips[i].pos);
     for (int i = 0; i < all.Count; i++)
     {
-        Vector3 d = all[i] - o;
-        float x = Vector3.Dot(d, along), y = Vector3.Dot(d, up);
+        float x = Vector3.Dot(all[i] - o, along), y = H(all[i]);
         x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y);
     }
-    float mx = (x1 - x0) * 0.08f + 5, my = (y1 - y0) * 0.15f + 5;
+    float mx = (x1 - x0) * 0.06f + 5, my = (y1 - y0) * 0.15f + 5;
     x0 -= mx; x1 += mx; y0 -= my; y1 += my;
-    float top = 30, bottom = 26;
-    Vector2 area = new Vector2(size.X, size.Y - top - bottom);
-    float sx = area.X / (x1 - x0), sy = area.Y / (y1 - y0);
-    Func<Vector3, Vector2> P = v => { Vector3 d = v - o; return at + new Vector2((Vector3.Dot(d, along) - x0) * sx, top + (y1 - Vector3.Dot(d, up)) * sy); };
+    float top = 30, bottom = 26, left = 52;
+    Vector2 area = new Vector2(size.X - left, size.Y - top - bottom);
+    float sx = area.X / (x1 - x0), sy = Math.Min(area.Y / (y1 - y0), sx * 5);
+    float yMid = (y0 + y1) / 2;
+    Func<float, float, Vector2> P2 = (x, y) => at + new Vector2(left + (x - x0) * sx, top + area.Y / 2 - (y - yMid) * sy);
+    Func<Vector3, Vector2> P = v => P2(Vector3.Dot(v - o, along), H(v));
 
     DText("Side view: station -> job | heights x" + Math.Round(sy / sx, 1), at + new Vector2(size.X / 2, 4), Color.White, 0.7f, TextAlignment.CENTER);
-    // ground line at the station's height
-    DLine(P(o + along * x0), P(o + along * x1), new Color(40, 40, 40), 1);
+    // height lines every 1/2/5 x 10^n m, labelled (height above the station)
+    float range = area.Y / sy, step = 1;
+    while (range / step > 6) step *= step.ToString().StartsWith("2") ? 2.5f : 2;
+    for (float h = (float)Math.Ceiling((yMid - range / 2) / step) * step; h <= yMid + range / 2; h += step)
+    {
+        Vector2 a = P2(x0, h);
+        if (a.Y < at.Y + top || a.Y > at.Y + size.Y - bottom) continue;
+        DLine(a, P2(x1, h), h == 0 ? new Color(70, 70, 70) : new Color(35, 35, 35), 1);
+        DText((h > 0 ? "+" : "") + h + " m", new Vector2(at.X + 2, a.Y - 9), Color.Gray, 0.5f, TextAlignment.LEFT);
+    }
     // path (fewer segments when they'd be shorter than ~3 px)
-    Vector2 last = new Vector2(-9999, -9999);
+    Vector2 last = new Vector2();
     for (int i = 0; i < pts.Count; i++)
     {
         Vector2 q = P(pts[i]);
@@ -231,20 +248,19 @@ void DrawSideMap(Vector2 at, Vector2 size)
         if (i > 0) DLine(last, q, Color.SkyBlue, 2);
         last = q;
     }
-    // station, job site
+    // station, job sites (with their height)
     DBox(P(o), new Vector2(14, 14), Color.White, "SquareSimple");
     DText("Station", P(o) + new Vector2(0, 10), Color.White, 0.6f, TextAlignment.CENTER);
     for (int j = 0; j < jobs.Count; j++)
     {
-        String[] k = jobs[j].key.Split('|');
-        Vector3 jp = new Vector3(float.Parse(k[0]), float.Parse(k[1]), float.Parse(k[2]));
+        Vector3 jp = JobPos(jobs[j]);
         int n = 0;
         for (int i = 0; i < jobs[j].done.Length; i++) if (jobs[j].done[i] == '1') n++;
-        float half = jobs[j].w * jobs[j].tw / 2;
-        DLine(P(jp - along * half), P(jp + along * half), Color.Orange, 4);
-        DText("Job " + (j + 1) + " " + n + "/" + jobs[j].done.Length, P(jp) + new Vector2(0, 6), Color.Orange, 0.6f, TextAlignment.CENTER);
+        float half = jobs[j].w * jobs[j].tw / 2, jh = H(jp);
+        DLine(P(jp) - new Vector2(half * sx, 0), P(jp) + new Vector2(half * sx, 0), Color.Orange, 4);
+        DText("Job " + (j + 1) + " " + n + "/" + jobs[j].done.Length + " " + (jh >= 0 ? "+" : "") + Math.Round(jh) + " m", P(jp) + new Vector2(0, 6), Color.Orange, 0.6f, TextAlignment.CENTER);
     }
-    // ships: colour by what they do, a line where they're heading
+    // ships: colour by what they do, a line where they're heading, height
     for (int i = 0; i < tcShips.Count; i++)
     {
         TCShip t = tcShips[i];
@@ -252,7 +268,10 @@ void DrawSideMap(Vector2 at, Vector2 size)
         Vector2 q = P(t.pos);
         if (t.vel.LengthSquared() > 0.25f) DLine(q, P(t.pos + t.vel * 5), c, 2);
         DBox(q, new Vector2(12, 12), c, "Circle");
-        DText(TCName(t), q - new Vector2(0, 26), c, 0.55f, TextAlignment.CENTER);
+        float th = H(t.pos);
+        DText(TCName(t) + " " + (th >= 0 ? "+" : "") + Math.Round(th) + " m", q - new Vector2(0, 26), c, 0.55f, TextAlignment.CENTER);
     }
     DText("green moving | yellow giving way | violet waiting | grey parked | red emergency", at + new Vector2(size.X / 2, size.Y - 22), Color.Gray, 0.5f, TextAlignment.CENTER);
 }
+
+Vector3 JobPos(JobRec job) { String[] k = job.key.Split('|'); return new Vector3(float.Parse(k[0]), float.Parse(k[1]), float.Parse(k[2])); }

@@ -92,8 +92,10 @@ void UpdateTraffic()
     trafficTick = 0;
     Vector3 g = remoteControl.GetNaturalGravity();
     if (g.LengthSquared() > 0.01f) g.Normalize();
-    // recorded path for the controller's map / debug drawing, every ~15 s
-    if (++dbgPathTick % 30 == 1) IGC.SendBroadcastMessage("[PAMPTH]", myGridId + ";" + DbgPath());
+    // recorded path (+ planet centre: real heights) for the controller's map / debug drawing, every ~15 s
+    Vector3D pc;
+    if (++dbgPathTick % 30 == 1) IGC.SendBroadcastMessage("[PAMPTH]", myGridId + ";" + DbgPath() + ";" +
+        (remoteControl.TryGetPlanetPosition(out pc) ? (long)pc.X + "|" + (long)pc.Y + "|" + (long)pc.Z : ""));
     if (debugDraw) // for the controller's debug drawing: id;jobPos;left;down;target;rays;forward
     {
         IGC.SendBroadcastMessage("[PAMDBG]", myGridId + ";" + VectorToString(jobPosition.position) + ";" +

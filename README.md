@@ -184,7 +184,7 @@ The settings are in the **Custom Data of the programmable block**, in the `[PAM 
 | `fastSpeed` | 10 | ship | grinding: speed when no blocks are detected |
 | `minAccelerationSmall` / `minAccelerationLarge` | 0.2 / 0.1 | both | [m/s²] minimum acceleration in space before the ship counts as too heavy |
 | `minEjection` | 25 | ship | [%] minimum ejected cargo to continue the job |
-| `setLCDFontAndSize` | true | both | set font and size of the LCDs |
+| `setLCDFontAndSize` | true | both | set font and size of an LCD once, when the script first finds it (change them afterwards as you like) |
 | `obstacleBrake` | true | ship | camera obstacle brake |
 | `obstacleLookAhead` | 3 | ship | [s] scan distance = speed x this + ship size |
 | `obstacleTimeout` | 10 | ship | [s] show "Path blocked" after holding this long |
@@ -224,7 +224,7 @@ Besides the original modes (`main:<page>`, `mainX`, `menu`, `inventory`, `menu:<
 | `ship:<name>` | One ship: state, status, cargo, battery / hydrogen / uranium, speed, job progress and hole, right of way, docking, flags, last contact | Corner LCDs work |
 | `log` | Coordination events, newest first, with the time: dock clearances, docked / left, connector failed, emergency, hole assigned / done, job done, who gives way to whom, staged "Move home" order, contact lost / back | The last 40 events; the same event again within 30 s is shown once |
 | `job:<n>` | Drawn hole matrix of job n: grey done, orange a ship working it (with the end of its name), blue free. Columns left to right, rows top to bottom, as seen from behind a ship drilling it | Drawn screen (redrawn about once a second) |
-| `map` | Drawn side view from the station towards the (first) job: recorded path, station, job site with its progress, ships (green moving, yellow giving way, violet waiting, grey parked, red emergency) with a line where they're heading | Heights are scaled up to stay readable (factor shown at the top); a wide LCD works best |
+| `map` | Drawn side view from the station towards the (first) job: recorded path, station, job site with its progress and height, ships (green moving, yellow giving way, violet waiting, grey parked, red emergency) with their height and a line where they're heading; height lines labelled in metres above the station | On a planet heights are real altitude (distance from the planet's centre, sent by the ships), so the curve of the planet doesn't tilt the view. Heights are stretched at most 5x (factor shown at the top). The terrain itself isn't known: the path shows how the ships fly over it. A wide LCD works best |
 
 Ships send their battery / hydrogen / uranium, emergency flag and "up" (gravity) with their traffic message, and their recorded path every ~15 s, so ships and controller both need this version.
 
