@@ -52,7 +52,6 @@ class DbgShip
     public long id;
     public Vector3 jobPos, left, down, target, fwd;
     public bool hasJob;
-    public String path = ""; // recorded path, "x|y|z:..." (ships send it every ~10 s)
     public List<Vector3> rayFrom = new List<Vector3>(), rayTo = new List<Vector3>();
     public List<bool> rayHit = new List<bool>();
     public DateTime time;
@@ -76,7 +75,7 @@ void HandleDebugMessage(String data)
     s.hasJob = s.left.LengthSquared() > 0.5f;
     s.target = StringToVector(f[4]);
     s.time = TimeNow();
-    if (f.Length >= 8) { s.fwd = StringToVector(f[6]); if (f[7] != "") s.path = f[7]; }
+    if (f.Length >= 7) s.fwd = StringToVector(f[6]);
     if (f[5] == "") return; // keep the last rays until new ones come
     s.rayFrom.Clear(); s.rayTo.Clear(); s.rayHit.Clear();
     String[] rays = f[5].Split(':');
@@ -105,12 +104,11 @@ void UpdateDebugDraw()
 
     dbg.RemoveDraw();
     // recorded paths (ships sharing a path: drawn once)
-    for (int i = 0; i < dbgShips.Count; i++)
+    List<String> drawn = new List<String>();
+    foreach (String ps in shipPaths.Values)
     {
-        String ps = dbgShips[i].path;
-        bool seen = ps == "";
-        for (int k = 0; k < i && !seen; k++) seen = dbgShips[k].path == ps;
-        if (seen) continue;
+        if (ps == "" || drawn.Contains(ps)) continue;
+        drawn.Add(ps);
         String[] pts = ps.Split(':');
         for (int k = 1; k < pts.Length; k++) dbg.Line(StringToVector(pts[k - 1]), StringToVector(pts[k]), Color.SkyBlue, 0.1f);
         dbg.Label("Path start", StringToVector(pts[0]), Color.SkyBlue);

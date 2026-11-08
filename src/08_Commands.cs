@@ -77,13 +77,3 @@ void ProcessShipArgument(string argument)
 }
 
 
-// ========================== HELP TEXT ==========================
-
-String GetHelpText()
-{
-    // short list: what each one does and the CFG values are in the README ("Run arguments")
-    return "\n\nRun-arguments (details: README):\n" +
-        "UP DOWN APPLY UPLOOP DOWNLOOP\nPATHHOME PATH START STOP CONT\nJOBPOS HOMEPOS FULL ALIGN RESET\n" +
-        "EXPORT IMPORT \"IMPORT JOB\"\n" +
-        (shipMode != ShipMode.Shuttle ? "SHUTTLE NEXT PREV\nCFGS w h depth | CFGB done damage\nCFGL maxload limit | CFGE ur bat hyd\nCFGW fwd bwd | CFGA accel\n" : "UNDOCK\n");
-}

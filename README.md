@@ -132,7 +132,7 @@ Pasting the wrong one is harmless: the PB just says which file it needs. `PAM_Mi
 
 ## Run arguments
 
-The PB's help page lists them in short; in full (type without the brackets):
+Type them without the brackets:
 
 | Argument | What it does |
 |---|---|
@@ -214,6 +214,20 @@ All three are on by default and can be turned off in the settings (see Settings 
 - **Docking retries:** if a connector doesn't lock after 3 tries, the ship leaves it and tells the station, which won't give it that connector again; the ship keeps its place in the queue and gets another one ("Docking failed: trying another connector"). Without a station it skips that connector in the dock pool. The list is cleared once it docks.
 - **Co-op mining:** set up the job on one ship, then `EXPORT` it. On the other ships, run `IMPORT JOB` (this keeps their own path and home dock) and then `CONT`. Ships on the same job take holes in the normal mining order, each one the next hole no other ship has. The next ship takes the hole right beside the other one. A ship keeps its hole while it is away unloading, and the ships share which holes are finished. When every hole left is taken by other ships, the ship waits on a ring 2.5 ship sizes above the job centre, each ship on its own place of the ring, above the ships working or passing ("Waiting for a free hole"), and takes the next hole that frees up. It returns home if its energy runs low while waiting. If a `[PAM-Controller]` PB (with `PAM_Controller.cs`) hears the ships, it keeps the master record of the job and hands out the holes: it remembers finished holes and each ship's hole, so a ship keeps its hole even while it's out of radio range unloading (dropped after 10 minutes without a message). A full IMPORT doesn't copy the exporting ship's claimed hole, and a ship drops a hole of its own when the controller has given it to another ship. When a ship moves to another job it leaves the old job's record on the controller, so the old job disappears from the list. A ship asking for a hole waits up to 5 s for the controller ("Waiting for the controller"), then picks one itself as above. A ship the controller can't hear (its antenna doesn't reach the station, even if it hears the station) picks its holes itself right away. The controller's main screen shows each job's progress. For the same job, the ships need the same drill layout. A single ship mines in the original order.
 
+## Controller screens
+
+Besides the original modes (`main:<page>`, `mainX`, `menu`, `inventory`, `menu:<ship>`, `inventory:<ship>`), a `[PAM-Controller]` LCD can show one of these (`mode=...` in the LCD's Custom Data; an empty Custom Data gets the list as a template):
+
+| Mode | Shows | Notes |
+|---|---|---|
+| `fleet` | One line per ship: state, cargo %, battery %, hydrogen %, current hole, flags (`EMG` emergency, `QUEUE` waiting in the dock queue, `PARKED` landed / out of service, `WAIT` waiting, `GIVE` giving way, `CLEARED` cleared to dock). Docking-area status, jobs and traffic above it | Sets the Monospace font (if `setLCDFontAndSize` is on) so the columns line up; font size 0.5–0.6 on a normal LCD |
+| `ship:<name>` | One ship: state, status, cargo, battery / hydrogen / uranium, speed, job progress and hole, right of way, docking, flags, last contact | Corner LCDs work |
+| `log` | Coordination events, newest first, with the time: dock clearances, docked / left, connector failed, emergency, hole assigned / done, job done, who gives way to whom, staged "Move home" order, contact lost / back | The last 40 events; the same event again within 30 s is shown once |
+| `job:<n>` | Drawn hole matrix of job n: grey done, orange a ship working it (with the end of its name), blue free. Columns left to right, rows top to bottom, as seen from behind a ship drilling it | Drawn screen (redrawn about once a second) |
+| `map` | Drawn side view from the station towards the (first) job: recorded path, station, job site with its progress, ships (green moving, yellow giving way, violet waiting, grey parked, red emergency) with a line where they're heading | Heights are scaled up to stay readable (factor shown at the top); a wide LCD works best |
+
+Ships send their battery / hydrogen / uranium, emergency flag and "up" (gravity) with their traffic message, and their recorded path every ~15 s, so ships and controller both need this version.
+
 ## Changes from the original 1.3.1
 
 Behaviour follows the original script (`PAM_ORIGINAL.cs`). Fixes on top of it:
@@ -230,7 +244,7 @@ Behaviour follows the original script (`PAM_ORIGINAL.cs`). Fixes on top of it:
 - **Debug drawing in 3D** (offline worlds): add Digi's *(DevTool) Programmable Block DebugAPI* mod (Workshop 2654858862) to an offline world, and set `debugDraw=true` in the [PAM settings] section of the Custom Data of the controller PB and of the ships (then Recompile). The mod doesn't work in multiplayer: on a server it does nothing, so leave `debugDraw` off there. The controller then draws, refreshed twice a second:
   - every PAM ship as a wire sphere of its size: green moving, yellow giving way, grey parked. A white line shows where it will be in 3 s, a cyan line the way it wants to go.
   - a red line between two ships the controller sees on a collision course.
-  - from the ships: the recorded path (sky blue, "Path start" / "Path end"; sent every ~10 s, drawn once for ships sharing it), the waiting ring above each job (6 violet spots), and over each hole a line one ship size up: where the ships line up over it and come straight down;
+  - from the ships: the recorded path (sky blue, "Path start" / "Path end"; sent every ~15 s, drawn once for ships sharing it), the waiting ring above each job (6 violet spots), and over each hole a line one ship size up: where the ships line up over it and come straight down;
   - also from the ships: a blue line to the flight target, the camera rays (green clear, red hit), and each job's hole grid: grey done, orange claimed (with a line from the ship to its hole), white free.
   - the docking area: `[PAM-Zone]` sensor boxes, `[PAM-Lane]` camera rays (purple), and a green line from the ship cleared to dock to its connector.
   - text labels (HUD markers): each ship's name and state (moving, slowing/holding while giving way, parked), each conflict with who gives way, each claimed hole with its ship, the job's progress, the docking area with its status, and the ship cleared to dock or undock.

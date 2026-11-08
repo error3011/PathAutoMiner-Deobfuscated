@@ -44,7 +44,6 @@ void PrintDisplays()
     menuCacheText = BuildMenuScreen(false);
     mainText += menuCacheText;
     echoText += menuCacheText;
-    echoText += GetHelpText();
 
     for (int i = 0; i < lcdPanels.Count; i++) lcdPanels[i].WriteText(mainText);
     for (int i = 0; i < textSurfaces.Count; i++) textSurfaces[i].WriteText(mainText);

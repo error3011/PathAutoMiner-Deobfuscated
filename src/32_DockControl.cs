@@ -138,6 +138,8 @@ void GrantNext()
     clearedKind = pick.kind;
     clearedConn = pick.kind == 1 ? conn : 0;
     clearedSince = TimeNow();
+    IMyShipConnector cc = StationConnector(conn);
+    AddLog("Dock: " + ShipName(pick.ship) + (pick.kind == 2 ? " cleared to undock" : " cleared to " + (cc != null ? cc.CustomName : "dock")) + (pick.emg ? " (emergency)" : ""));
 }
 
 void UpdateDockControl()
@@ -164,6 +166,8 @@ void HandleDockMessage(String data)
         long ship = long.Parse(f[1]);
         if (f[0] == "D")
         {
+            DockRequest q = dockRequests.Find(x => x.ship == ship);
+            if (q != null) AddLog("Dock: " + ShipName(ship) + (q.kind == 2 ? " left" : " docked"));
             for (int i = dockRequests.Count - 1; i >= 0; i--) if (dockRequests[i].ship == ship) dockRequests.RemoveAt(i);
             if (clearedShip == ship) clearedShip = 0;
             int d = dockingShips.IndexOf(ship);
@@ -180,8 +184,12 @@ void HandleDockMessage(String data)
             if (r.kind != kind) r.first = TimeNow();
             r.kind = kind; r.home = home; r.canUsePool = f[4] == "1"; r.last = TimeNow();
             r.usable = f.Length >= 6 ? "," + f[5] + "," : null;
+            String badWas = r.bad;
+            bool emgWas = r.emg;
             r.bad = f.Length >= 7 ? "," + f[6] + "," : "";
             r.emg = f.Length >= 8 && f[7] == "1";
+            if (badWas != "" && r.bad.Length > badWas.Length) AddLog("Dock: " + ShipName(ship) + " couldn't lock its connector, gets another");
+            if (r.emg && !emgWas) AddLog("EMERGENCY: " + ShipName(ship) + " low on energy, docks first");
             // its connector didn't lock: drop that clearance, the request (and its place in the queue) stays
             int d = dockingShips.IndexOf(r.ship);
             if (d >= 0 && r.bad.Contains("," + dockingConns[d] + ",")) { dockingShips.RemoveAt(d); dockingConns.RemoveAt(d); }
@@ -199,7 +207,7 @@ void RunDockControl()
     for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == clearedShip) cleared = dockRequests[i];
     if (clearedShip != 0 && cleared == null) clearedShip = 0;
     if (cleared != null && (TimeNow() - clearedSince).TotalSeconds > CLEARANCE_TIMEOUT)
-    { clearedShip = 0; cleared.first = TimeNow(); } // too slow: back of the queue
+    { AddLog("Dock: " + ShipName(clearedShip) + " too slow, back of the queue"); clearedShip = 0; cleared.first = TimeNow(); } // too slow: back of the queue
     // ships on their last leg that stopped asking (docked, or gave up): done
     for (int i = dockingShips.Count - 1; i >= 0; i--)
     {

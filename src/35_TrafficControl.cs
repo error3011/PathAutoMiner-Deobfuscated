@@ -22,6 +22,9 @@ class TCShip
     public String job = "";
     public int phase;
     public DateTime time;
+    public int hole = -1, flag, bat = -1, h2, ur; // claimed hole, 1 queued / 2 parked, energy (screens)
+    public bool emg;
+    public Vector3 up;
 }
 
 class TCPair
@@ -43,7 +46,8 @@ void HandleTrafficControl(String data)
     long id = long.Parse(f[0]);
     TCShip s = null;
     for (int i = 0; i < tcShips.Count; i++) if (tcShips[i].id == id) s = tcShips[i];
-    if (s == null) { s = new TCShip(); s.id = id; tcShips.Add(s); }
+    bool isNew = s == null;
+    if (isNew) { s = new TCShip(); s.id = id; tcShips.Add(s); }
     s.pos = StringToVector(f[1]);
     s.vel = StringToVector(f[2]);
     s.dia = float.Parse(f[3]);
@@ -58,6 +62,14 @@ void HandleTrafficControl(String data)
     }
     s.pb = f.Length >= 12 ? long.Parse(f[11]) : 0;
     s.time = TimeNow();
+    s.hole = int.Parse(f[5]);
+    s.flag = f.Length >= 10 ? int.Parse(f[9]) : 0;
+    if (f.Length >= 13)
+    {
+        String[] e = f[12].Split(',');
+        s.bat = int.Parse(e[0]); s.h2 = int.Parse(e[1]); s.ur = int.Parse(e[2]); s.emg = e[3] == "1"; s.up = StringToVector(e[4]) / 10;
+    }
+    if (isNew) AddLog("Contact: " + TCName(s));
 }
 
 // not moving and not wanting to move (docked, parked, waiting in the dock queue, idle)
@@ -77,7 +89,7 @@ void UpdateTrafficControl()
 void ComputeTrafficControl()
 {
     for (int i = tcShips.Count - 1; i >= 0; i--)
-        if ((TimeNow() - tcShips[i].time).TotalSeconds > 3) tcShips.RemoveAt(i);
+        if ((TimeNow() - tcShips[i].time).TotalSeconds > 3) { AddLog("Contact lost: " + TCName(tcShips[i])); tcShips.RemoveAt(i); }
     for (int i = tcPairs.Count - 1; i >= 0; i--)
         if ((TimeNow() - tcPairs[i].last).TotalSeconds > 2) tcPairs.RemoveAt(i); // conflict over: forget who gave way
     for (int i = 0; i < tcShips.Count; i++) tcShips[i].limit = -1;
@@ -116,7 +128,12 @@ void ComputeTrafficControl()
                 if ((tcPairs[k].a == a.id && tcPairs[k].b == b.id) || (tcPairs[k].a == b.id && tcPairs[k].b == a.id)) p = tcPairs[k];
             int sig = a.id < b.id ? a.prio * 8 + b.prio : b.prio * 8 + a.prio;
             if (p == null) { p = new TCPair(); p.a = a.id; p.b = b.id; p.sig = sig + 1; tcPairs.Add(p); }
-            if (p.sig != sig) { p.sig = sig; p.yielder = TCYielder(a, b, ua, ub, rel, dist); }
+            if (p.sig != sig)
+            {
+                long was = p.yielder;
+                p.sig = sig; p.yielder = TCYielder(a, b, ua, ub, rel, dist);
+                if (p.yielder != was) AddLog("Traffic: " + (p.yielder == a.id ? TCName(a) + " gives way to " + TCName(b) : TCName(b) + " gives way to " + TCName(a)));
+            }
             p.last = TimeNow();
             TCShip y = p.yielder == a.id ? a : b;
             float lim = tooClose || t < 4 ? 0 : Math.Max(1, y.vel.Length() * 0.5f); // close: hold, later: slow down
@@ -246,6 +263,7 @@ void UpdateStagedHome()
     if (homeQueue.Count == 0) return;
     homeCurrent = homeQueue[0];
     homeQueue.RemoveAt(0);
+    AddLog("Move home: " + homeCurrent.name + " goes (" + homeQueue.Count + " waiting)");
     homeStartPos = homeCurrent.position;
     homeSentTime = TimeNow();
     TCShip t = FindTCShip(homeCurrent);

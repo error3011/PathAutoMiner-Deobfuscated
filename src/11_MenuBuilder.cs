@@ -41,8 +41,6 @@ String BuildMenuScreen(bool applyAction)
         if (AddMenuItem(ref text, sel, idx++, applyAction, " Behavior settings"))
             if (isShuttle) NavigateToMenu(MenuPage.ShuttleBehavior); else NavigateToMenu(MenuPage.BehaviorSettings);
         if (AddMenuItem(ref text, sel, idx++, applyAction, " Info")) NavigateToMenu(MenuPage.InfoPage);
-        if (shipMode != ShipMode.Shuttle)
-            if (AddMenuItem(ref text, sel, idx++, applyAction, " Help")) NavigateToMenu(MenuPage.HelpPage);
     }
     // ---- JOB SETUP ----
     else if (currentMenu == MenuPage.JobSetup)
@@ -225,18 +223,6 @@ String BuildMenuScreen(bool applyAction)
         text += "Drill area: " + Math.Round(toolWidth, 1) + "x" + Math.Round(toolHeight, 1) + "m Ship: " + Math.Round(shipFootWidth, 1) + "x" + Math.Round(shipFootHeight, 1) + "m (" + Math.Round(shipDiameter, 1) + "m)\n" + (cameras.Count > 0 ? "Cameras: " + cameraCoverage + "\n" : "");
         text += "Broadcast: " + (broadcastEnabled ? "Online - " + shipName : "Offline") + "\n";
         text += "Max Instructions: " + Math.Round(maxInstructionPercent * 100f, 1) + "% \n";
-    }
-    // ---- HELP PAGE ----
-    else if (currentMenu == MenuPage.HelpPage)
-    {
-        if (AddMenuItem(ref text, sel, idx++, applyAction, " Back")) NavigateToMenu(MenuPage.Main);
-        text += thinSep;
-        text += "1. Dock to your docking station\n";
-        text += "2. Select Record path & set home\n";
-        text += "3. Fly the path to the ores\n";
-        text += "4. Select stop path recording\n";
-        text += "5. Align ship in mining direction\n";
-        text += "6. Select Setup job and start\n";
     }
 
     if (setupErrorLevel == 2) text = "Fatal setup error\nNext scan: " + scanCountdown + "s\n";

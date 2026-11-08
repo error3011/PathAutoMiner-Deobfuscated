@@ -58,7 +58,9 @@ void AssignJobHoles(JobRec job)
     for (int i = 0; i < job.ships.Count; i++)
     {
         JobShip s = job.ships[i];
+        int was = s.cell;
         if (s.want && (s.cell < 0 || job.done[s.cell] == '1')) s.cell = NextFreeHole(job, s);
+        if (s.cell != was && s.cell >= 0) AddLog("Job: " + ShipName(s.id) + " -> hole " + (job.order.IndexOf(s.cell) + 1));
     }
 }
 
@@ -86,6 +88,7 @@ void HandleJobTraffic(String data)
     if (k.Length < 8) return;
     JobRec job = null;
     for (int i = 0; i < jobs.Count; i++) if (jobs[i].key == f[4]) job = jobs[i];
+    bool fresh = job == null; // just heard of this job (e.g. controller restarted): no log line per finished hole
     if (job == null)
     {
         job = new JobRec();
@@ -102,7 +105,15 @@ void HandleJobTraffic(String data)
     if (d.Length == job.done.Length)
     {
         char[] c = job.done.ToCharArray();
-        for (int i = 0; i < c.Length; i++) if (d[i] == '1') c[i] = '1';
+        for (int i = 0; i < c.Length; i++)
+            if (d[i] == '1' && c[i] != '1')
+            {
+                c[i] = '1';
+                if (fresh) continue;
+                int n = 0;
+                for (int q = 0; q < c.Length; q++) if (c[q] == '1') n++;
+                AddLog(n == c.Length ? "Job: all " + n + " holes done" : "Job: hole " + (job.order.IndexOf(i) + 1) + " done (" + n + "/" + c.Length + ")");
+            }
         job.done = new String(c);
     }
     long id = long.Parse(f[0]);

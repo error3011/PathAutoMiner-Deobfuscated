@@ -90,7 +90,7 @@ public enum SpiralResult   { Found, AllDone, Error }
 public enum DataResult     { Success, Failed, NoData, NewVersion }
 public enum CommandState   { None, Pending, Received, NoAnswer }
 public enum ConfigType     { WorkSpeed, Acceleration, MaxLoad, Ignore, MinBattery, MinUranium, MinHydrogen, TimerDelay, Overlap }
-public enum LCDMode        { Unknown, MainPaged, MainCompact, Menu, Inventory, Debug, MainPagedCompact }
+public enum LCDMode        { Unknown, MainPaged, MainCompact, Menu, Inventory, Debug, MainPagedCompact, Fleet, Ship, Log, Job, Map }
 
 // ========================== 03_Types.cs ==========================
 // ========================== CLASSES ==========================
@@ -986,18 +986,6 @@ void ProcessShipArgument(string argument)
     }
 }
 
-
-// ========================== HELP TEXT ==========================
-
-String GetHelpText()
-{
-    // short list: what each one does and the CFG values are in the README ("Run arguments")
-    return "\n\nRun-arguments (details: README):\n" +
-        "UP DOWN APPLY UPLOOP DOWNLOOP\nPATHHOME PATH START STOP CONT\nJOBPOS HOMEPOS FULL ALIGN RESET\n" +
-        "EXPORT IMPORT \"IMPORT JOB\"\n" +
-        (shipMode != ShipMode.Shuttle ? "SHUTTLE NEXT PREV\nCFGS w h depth | CFGB done damage\nCFGL maxload limit | CFGE ur bat hyd\nCFGW fwd bwd | CFGA accel\n" : "UNDOCK\n");
-}
-
 // ========================== 09_ShuttleConfig.cs ==========================
 // ========================== SHUTTLE / ALIGNMENT / CONFIG ==========================
 
@@ -1187,8 +1175,6 @@ String BuildMenuScreen(bool applyAction)
         if (AddMenuItem(ref text, sel, idx++, applyAction, " Behavior settings"))
             if (isShuttle) NavigateToMenu(MenuPage.ShuttleBehavior); else NavigateToMenu(MenuPage.BehaviorSettings);
         if (AddMenuItem(ref text, sel, idx++, applyAction, " Info")) NavigateToMenu(MenuPage.InfoPage);
-        if (shipMode != ShipMode.Shuttle)
-            if (AddMenuItem(ref text, sel, idx++, applyAction, " Help")) NavigateToMenu(MenuPage.HelpPage);
     }
     // ---- JOB SETUP ----
     else if (currentMenu == MenuPage.JobSetup)
@@ -1371,18 +1357,6 @@ String BuildMenuScreen(bool applyAction)
         text += "Drill area: " + Math.Round(toolWidth, 1) + "x" + Math.Round(toolHeight, 1) + "m Ship: " + Math.Round(shipFootWidth, 1) + "x" + Math.Round(shipFootHeight, 1) + "m (" + Math.Round(shipDiameter, 1) + "m)\n" + (cameras.Count > 0 ? "Cameras: " + cameraCoverage + "\n" : "");
         text += "Broadcast: " + (broadcastEnabled ? "Online - " + shipName : "Offline") + "\n";
         text += "Max Instructions: " + Math.Round(maxInstructionPercent * 100f, 1) + "% \n";
-    }
-    // ---- HELP PAGE ----
-    else if (currentMenu == MenuPage.HelpPage)
-    {
-        if (AddMenuItem(ref text, sel, idx++, applyAction, " Back")) NavigateToMenu(MenuPage.Main);
-        text += thinSep;
-        text += "1. Dock to your docking station\n";
-        text += "2. Select Record path & set home\n";
-        text += "3. Fly the path to the ores\n";
-        text += "4. Select stop path recording\n";
-        text += "5. Align ship in mining direction\n";
-        text += "6. Select Setup job and start\n";
     }
 
     if (setupErrorLevel == 2) text = "Fatal setup error\nNext scan: " + scanCountdown + "s\n";
@@ -4705,7 +4679,6 @@ void PrintDisplays()
     menuCacheText = BuildMenuScreen(false);
     mainText += menuCacheText;
     echoText += menuCacheText;
-    echoText += GetHelpText();
 
     for (int i = 0; i < lcdPanels.Count; i++) lcdPanels[i].WriteText(mainText);
     for (int i = 0; i < textSurfaces.Count; i++) textSurfaces[i].WriteText(mainText);
@@ -4991,6 +4964,7 @@ void ControllerMainLoop(string argument)
     if (isTick) UpdateJobCoordination(); // co-op jobs: hand out holes
     if (isTick) UpdateTrafficControl();  // all ships at once: who gives way
     if (isTick) UpdateStagedHome();      // "Move home" for all: one ship after the other
+    if (isTick) UpdateScreens();         // recorded paths for the map
     if (isTick && tcSendTick == 0) UpdateDebugDraw(); // 3D debug drawing (DebugAPI mod), twice a second
     UpdateControllerDisplays();
 }
@@ -5171,7 +5145,7 @@ void ScanControllerBlocks()
     SetupTaggedSurfaces(taggedBlocks);
     SetupDebugPanels();
     ScanDockArea();
-    SetLCDFormat(lcdPanels, setLCDFontAndSize, 1.15f, false);
+    SetLCDFormat(lcdPanels.FindAll(q => ModeOf(q) < LCDMode.Fleet), setLCDFontAndSize, 1.15f, false); // the new screens keep their own format
     SetLCDFormat(textSurfaces, setLCDFontAndSize, 1.15f, true);
 
     // Write the LCD mode template into empty Custom Data; flag outdated Custom Data.
@@ -5195,12 +5169,17 @@ void UpdateControllerDisplays()
 
     for (int i = 0; i < textSurfaces.Count; i++)
         textSurfaces[i].WriteText(BuildControllerScreenForMode(LCDMode.MainCompact, "0", false));
+    bool draw = ++screenTick % 6 == 0; // drawn screens about once a second
     for (int i = 0; i < lcdPanels.Count; i++)
     {
         LCDMode mode = LCDMode.Unknown;
         String param = "";
-        ParseLCDMode(lcdPanels[i], out mode, out param);
-        lcdPanels[i].WriteText(BuildControllerScreenForMode(mode, param, i == 0));
+        IMyTextPanel p = lcdPanels[i];
+        ParseLCDMode(p, out mode, out param);
+        if (SpriteMode(mode)) { if (draw) DrawSpriteScreen(p, mode, param); continue; }
+        if (p.ContentType != ContentType.TEXT_AND_IMAGE) p.ContentType = ContentType.TEXT_AND_IMAGE;
+        if (mode == LCDMode.Fleet && setLCDFontAndSize && p.Font != "Monospace") p.Font = "Monospace"; // table columns
+        p.WriteText(BuildControllerScreenForMode(mode, param, i == 0));
     }
     Echo(echoText + GetDebugDrawLegend());
     for (int i = 0; i < debugPanels.Count; i++)
@@ -5345,8 +5324,12 @@ String GetLCDModeHelp(bool withDefault)
     if (withDefault) text += "mode=main:1\n\n";
     text += "//Available modes:\n" + "//main:<Page>\n" + "//mainX:<Page>  (no empty lines)\n" + "//menu\n" +
         "//inventory\n" + "//menu:<shipname>\n" + "//inventory:<shipname>";
+    // (the check for outdated Custom Data looks for the text above: new modes only in the template)
+    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)";
     return text;
 }
+
+LCDMode ModeOf(IMyTerminalBlock panel) { LCDMode m; String s; ParseLCDMode(panel, out m, out s); return m; }
 
 void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
 {
@@ -5361,6 +5344,11 @@ void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
     else if (modeKey == "MENU") mode = LCDMode.Menu;
     else if (modeKey == "INVENTORY") mode = LCDMode.Inventory;
     else if (modeKey == "DEBUG") mode = LCDMode.Debug;
+    else if (modeKey == "FLEET") mode = LCDMode.Fleet;
+    else if (modeKey == "SHIP") mode = LCDMode.Ship;
+    else if (modeKey == "LOG") mode = LCDMode.Log;
+    else if (modeKey == "JOB") mode = LCDMode.Job;
+    else if (modeKey == "MAP") mode = LCDMode.Map;
     if (mode == LCDMode.Unknown) param = modeStr;
 }
 
@@ -5376,6 +5364,9 @@ String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel)
         controllerPageCount2 = 0;
     }
     String text = "";
+    if (mode == LCDMode.Fleet) return BuildFleetScreen();
+    if (mode == LCDMode.Ship) return BuildShipScreen(param);
+    if (mode == LCDMode.Log) return BuildLogScreen();
     if (mode == LCDMode.MainPaged)
     {
         int page = 0;
@@ -5829,17 +5820,24 @@ void UpdateTraffic()
     // idle ships send too: docked (their connector counts as taken) or hovering (an obstacle)
     if (++trafficTick < 3) return; // ~2 messages per second
     trafficTick = 0;
-    if (debugDraw) // for the controller's debug drawing: id;jobPos;left;down;target;rays;forward;path (every ~10 s)
+    Vector3 g = remoteControl.GetNaturalGravity();
+    if (g.LengthSquared() > 0.01f) g.Normalize();
+    // recorded path for the controller's map / debug drawing, every ~15 s
+    if (++dbgPathTick % 30 == 1) IGC.SendBroadcastMessage("[PAMPTH]", myGridId + ";" + DbgPath());
+    if (debugDraw) // for the controller's debug drawing: id;jobPos;left;down;target;rays;forward
     {
         IGC.SendBroadcastMessage("[PAMDBG]", myGridId + ";" + VectorToString(jobPosition.position) + ";" +
             VectorToString(jobState == JobState.NoJob ? new Vector3() : jobPosition.leftDir) + ";" + VectorToString(miningDown) + ";" +
-            VectorToString(navTargetPos + trafficShift) + ";" + String.Join(":", debugRays) + ";" + VectorToString(miningForward) + ";" + (++dbgPathTick % 20 == 1 ? DbgPath() : ""));
+            VectorToString(navTargetPos + trafficShift) + ";" + String.Join(":", debugRays) + ";" + VectorToString(miningForward));
         debugRays.Clear();
     }
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (outOfService || emgStage == 1 || emgStage == 2 ? 2 : dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + (sentPrio = TrafficPrio()) + "," + (sentDest = (float)Math.Round(DestDist())) + ";" + Me.GetId());
+        ";" + (outOfService || emgStage == 1 || emgStage == 2 ? 2 : dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + (sentPrio = TrafficPrio()) + "," + (sentDest = (float)Math.Round(DestDist())) + ";" + Me.GetId() +
+        // for the controller's screens: battery %, hydrogen %, uranium kg, emergency, up (x10)
+        ";" + (batteryState == BatteryState.None ? -1 : (int)batteryPercent) + "," + (int)hydrogenPercent + "," + (int)uraniumAmount + "," + (emergency ? 1 : 0) + "," +
+        (int)(-g.X * 10) + "|" + (int)(-g.Y * 10) + "|" + (int)(-g.Z * 10));
 }
 
 void ParseTraffic(String data)
@@ -6668,6 +6666,8 @@ void GrantNext()
     clearedKind = pick.kind;
     clearedConn = pick.kind == 1 ? conn : 0;
     clearedSince = TimeNow();
+    IMyShipConnector cc = StationConnector(conn);
+    AddLog("Dock: " + ShipName(pick.ship) + (pick.kind == 2 ? " cleared to undock" : " cleared to " + (cc != null ? cc.CustomName : "dock")) + (pick.emg ? " (emergency)" : ""));
 }
 
 void UpdateDockControl()
@@ -6694,6 +6694,8 @@ void HandleDockMessage(String data)
         long ship = long.Parse(f[1]);
         if (f[0] == "D")
         {
+            DockRequest q = dockRequests.Find(x => x.ship == ship);
+            if (q != null) AddLog("Dock: " + ShipName(ship) + (q.kind == 2 ? " left" : " docked"));
             for (int i = dockRequests.Count - 1; i >= 0; i--) if (dockRequests[i].ship == ship) dockRequests.RemoveAt(i);
             if (clearedShip == ship) clearedShip = 0;
             int d = dockingShips.IndexOf(ship);
@@ -6710,8 +6712,12 @@ void HandleDockMessage(String data)
             if (r.kind != kind) r.first = TimeNow();
             r.kind = kind; r.home = home; r.canUsePool = f[4] == "1"; r.last = TimeNow();
             r.usable = f.Length >= 6 ? "," + f[5] + "," : null;
+            String badWas = r.bad;
+            bool emgWas = r.emg;
             r.bad = f.Length >= 7 ? "," + f[6] + "," : "";
             r.emg = f.Length >= 8 && f[7] == "1";
+            if (badWas != "" && r.bad.Length > badWas.Length) AddLog("Dock: " + ShipName(ship) + " couldn't lock its connector, gets another");
+            if (r.emg && !emgWas) AddLog("EMERGENCY: " + ShipName(ship) + " low on energy, docks first");
             // its connector didn't lock: drop that clearance, the request (and its place in the queue) stays
             int d = dockingShips.IndexOf(r.ship);
             if (d >= 0 && r.bad.Contains("," + dockingConns[d] + ",")) { dockingShips.RemoveAt(d); dockingConns.RemoveAt(d); }
@@ -6729,7 +6735,7 @@ void RunDockControl()
     for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == clearedShip) cleared = dockRequests[i];
     if (clearedShip != 0 && cleared == null) clearedShip = 0;
     if (cleared != null && (TimeNow() - clearedSince).TotalSeconds > CLEARANCE_TIMEOUT)
-    { clearedShip = 0; cleared.first = TimeNow(); } // too slow: back of the queue
+    { AddLog("Dock: " + ShipName(clearedShip) + " too slow, back of the queue"); clearedShip = 0; cleared.first = TimeNow(); } // too slow: back of the queue
     // ships on their last leg that stopped asking (docked, or gave up): done
     for (int i = dockingShips.Count - 1; i >= 0; i--)
     {
@@ -7075,7 +7081,9 @@ void AssignJobHoles(JobRec job)
     for (int i = 0; i < job.ships.Count; i++)
     {
         JobShip s = job.ships[i];
+        int was = s.cell;
         if (s.want && (s.cell < 0 || job.done[s.cell] == '1')) s.cell = NextFreeHole(job, s);
+        if (s.cell != was && s.cell >= 0) AddLog("Job: " + ShipName(s.id) + " -> hole " + (job.order.IndexOf(s.cell) + 1));
     }
 }
 
@@ -7103,6 +7111,7 @@ void HandleJobTraffic(String data)
     if (k.Length < 8) return;
     JobRec job = null;
     for (int i = 0; i < jobs.Count; i++) if (jobs[i].key == f[4]) job = jobs[i];
+    bool fresh = job == null; // just heard of this job (e.g. controller restarted): no log line per finished hole
     if (job == null)
     {
         job = new JobRec();
@@ -7119,7 +7128,15 @@ void HandleJobTraffic(String data)
     if (d.Length == job.done.Length)
     {
         char[] c = job.done.ToCharArray();
-        for (int i = 0; i < c.Length; i++) if (d[i] == '1') c[i] = '1';
+        for (int i = 0; i < c.Length; i++)
+            if (d[i] == '1' && c[i] != '1')
+            {
+                c[i] = '1';
+                if (fresh) continue;
+                int n = 0;
+                for (int q = 0; q < c.Length; q++) if (c[q] == '1') n++;
+                AddLog(n == c.Length ? "Job: all " + n + " holes done" : "Job: hole " + (job.order.IndexOf(i) + 1) + " done (" + n + "/" + c.Length + ")");
+            }
         job.done = new String(c);
     }
     long id = long.Parse(f[0]);
@@ -7198,6 +7215,9 @@ class TCShip
     public String job = "";
     public int phase;
     public DateTime time;
+    public int hole = -1, flag, bat = -1, h2, ur; // claimed hole, 1 queued / 2 parked, energy (screens)
+    public bool emg;
+    public Vector3 up;
 }
 
 class TCPair
@@ -7219,7 +7239,8 @@ void HandleTrafficControl(String data)
     long id = long.Parse(f[0]);
     TCShip s = null;
     for (int i = 0; i < tcShips.Count; i++) if (tcShips[i].id == id) s = tcShips[i];
-    if (s == null) { s = new TCShip(); s.id = id; tcShips.Add(s); }
+    bool isNew = s == null;
+    if (isNew) { s = new TCShip(); s.id = id; tcShips.Add(s); }
     s.pos = StringToVector(f[1]);
     s.vel = StringToVector(f[2]);
     s.dia = float.Parse(f[3]);
@@ -7234,6 +7255,14 @@ void HandleTrafficControl(String data)
     }
     s.pb = f.Length >= 12 ? long.Parse(f[11]) : 0;
     s.time = TimeNow();
+    s.hole = int.Parse(f[5]);
+    s.flag = f.Length >= 10 ? int.Parse(f[9]) : 0;
+    if (f.Length >= 13)
+    {
+        String[] e = f[12].Split(',');
+        s.bat = int.Parse(e[0]); s.h2 = int.Parse(e[1]); s.ur = int.Parse(e[2]); s.emg = e[3] == "1"; s.up = StringToVector(e[4]) / 10;
+    }
+    if (isNew) AddLog("Contact: " + TCName(s));
 }
 
 // not moving and not wanting to move (docked, parked, waiting in the dock queue, idle)
@@ -7253,7 +7282,7 @@ void UpdateTrafficControl()
 void ComputeTrafficControl()
 {
     for (int i = tcShips.Count - 1; i >= 0; i--)
-        if ((TimeNow() - tcShips[i].time).TotalSeconds > 3) tcShips.RemoveAt(i);
+        if ((TimeNow() - tcShips[i].time).TotalSeconds > 3) { AddLog("Contact lost: " + TCName(tcShips[i])); tcShips.RemoveAt(i); }
     for (int i = tcPairs.Count - 1; i >= 0; i--)
         if ((TimeNow() - tcPairs[i].last).TotalSeconds > 2) tcPairs.RemoveAt(i); // conflict over: forget who gave way
     for (int i = 0; i < tcShips.Count; i++) tcShips[i].limit = -1;
@@ -7292,7 +7321,12 @@ void ComputeTrafficControl()
                 if ((tcPairs[k].a == a.id && tcPairs[k].b == b.id) || (tcPairs[k].a == b.id && tcPairs[k].b == a.id)) p = tcPairs[k];
             int sig = a.id < b.id ? a.prio * 8 + b.prio : b.prio * 8 + a.prio;
             if (p == null) { p = new TCPair(); p.a = a.id; p.b = b.id; p.sig = sig + 1; tcPairs.Add(p); }
-            if (p.sig != sig) { p.sig = sig; p.yielder = TCYielder(a, b, ua, ub, rel, dist); }
+            if (p.sig != sig)
+            {
+                long was = p.yielder;
+                p.sig = sig; p.yielder = TCYielder(a, b, ua, ub, rel, dist);
+                if (p.yielder != was) AddLog("Traffic: " + (p.yielder == a.id ? TCName(a) + " gives way to " + TCName(b) : TCName(b) + " gives way to " + TCName(a)));
+            }
             p.last = TimeNow();
             TCShip y = p.yielder == a.id ? a : b;
             float lim = tooClose || t < 4 ? 0 : Math.Max(1, y.vel.Length() * 0.5f); // close: hold, later: slow down
@@ -7422,6 +7456,7 @@ void UpdateStagedHome()
     if (homeQueue.Count == 0) return;
     homeCurrent = homeQueue[0];
     homeQueue.RemoveAt(0);
+    AddLog("Move home: " + homeCurrent.name + " goes (" + homeQueue.Count + " waiting)");
     homeStartPos = homeCurrent.position;
     homeSentTime = TimeNow();
     TCShip t = FindTCShip(homeCurrent);
@@ -7484,7 +7519,6 @@ class DbgShip
     public long id;
     public Vector3 jobPos, left, down, target, fwd;
     public bool hasJob;
-    public String path = ""; // recorded path, "x|y|z:..." (ships send it every ~10 s)
     public List<Vector3> rayFrom = new List<Vector3>(), rayTo = new List<Vector3>();
     public List<bool> rayHit = new List<bool>();
     public DateTime time;
@@ -7508,7 +7542,7 @@ void HandleDebugMessage(String data)
     s.hasJob = s.left.LengthSquared() > 0.5f;
     s.target = StringToVector(f[4]);
     s.time = TimeNow();
-    if (f.Length >= 8) { s.fwd = StringToVector(f[6]); if (f[7] != "") s.path = f[7]; }
+    if (f.Length >= 7) s.fwd = StringToVector(f[6]);
     if (f[5] == "") return; // keep the last rays until new ones come
     s.rayFrom.Clear(); s.rayTo.Clear(); s.rayHit.Clear();
     String[] rays = f[5].Split(':');
@@ -7537,12 +7571,11 @@ void UpdateDebugDraw()
 
     dbg.RemoveDraw();
     // recorded paths (ships sharing a path: drawn once)
-    for (int i = 0; i < dbgShips.Count; i++)
+    List<String> drawn = new List<String>();
+    foreach (String ps in shipPaths.Values)
     {
-        String ps = dbgShips[i].path;
-        bool seen = ps == "";
-        for (int k = 0; k < i && !seen; k++) seen = dbgShips[k].path == ps;
-        if (seen) continue;
+        if (ps == "" || drawn.Contains(ps)) continue;
+        drawn.Add(ps);
         String[] pts = ps.Split(':');
         for (int k = 1; k < pts.Length; k++) dbg.Line(StringToVector(pts[k - 1]), StringToVector(pts[k]), Color.SkyBlue, 0.1f);
         dbg.Label("Path start", StringToVector(pts[0]), Color.SkyBlue);
@@ -7771,4 +7804,264 @@ String SettingsBlock()
 {
     int at = Me.CustomData.IndexOf(CFG_MARK);
     return at < 0 ? "" : "\n\n" + Me.CustomData.Substring(at);
+}
+
+// ========================== 38_Screens.cs ==========================
+// ========================== CONTROLLER SCREENS ==========================
+// Extra LCD modes (Custom Data "mode=..."):
+//   fleet          one line per ship: state, cargo, energy, hole, flags; docking area and jobs
+//   ship:<name>    one ship in detail
+//   log            coordination events (docking, holes, giving way, emergencies, contact), newest first
+//   job:<n>        hole matrix of job n (drawn, as seen behind a ship drilling it)
+//   map            side view base -> job: path, job site, ships (drawn; wide LCD recommended)
+// The drawn ones redraw about once a second.
+
+List<String> logLines = new List<String>();
+List<DateTime> logTimes = new List<DateTime>();
+Dictionary<long, String> shipPaths = new Dictionary<long, String>(); // grid id -> recorded path "x|y|z:..."
+IMyBroadcastListener pathListener = null;
+int screenTick = 0;
+
+void AddLog(String msg)
+{
+    // the same event again within 30 s (a conflict that comes and goes): once is enough
+    for (int i = 0; i < logLines.Count && i < 10; i++) if (logLines[i].EndsWith(msg) && (TimeNow() - logTimes[i]).TotalSeconds < 30) return;
+    logLines.Insert(0, DateTime.Now.ToString("HH:mm:ss ") + msg);
+    logTimes.Insert(0, TimeNow());
+    if (logLines.Count > 40) { logLines.RemoveAt(40); logTimes.RemoveAt(40); }
+}
+
+String ShipName(long gridId)
+{
+    TCShip t = tcShips.Find(q => q.id == gridId);
+    if (t != null) return TCName(t);
+    String id = gridId.ToString();
+    return "Ship " + id.Substring(Math.Max(0, id.Length - 4));
+}
+
+void UpdateScreens()
+{
+    if (pathListener == null) pathListener = IGC.RegisterBroadcastListener("[PAMPTH]");
+    int budget = 10;
+    while (pathListener.HasPendingMessage && budget-- > 0)
+    {
+        String data = pathListener.AcceptMessage().Data as String;
+        if (data == null) continue;
+        int k = data.IndexOf(';');
+        long id;
+        if (k > 0 && long.TryParse(data.Substring(0, k), out id)) shipPaths[id] = data.Substring(k + 1);
+    }
+}
+
+bool SpriteMode(LCDMode m) { return m == LCDMode.Map || m == LCDMode.Job; }
+
+String ShortState(String s)
+{
+    return s.Replace("Flying to ", "To ").Replace(" position", " pos").Replace("Returning to dock", "Going home").Replace("Waiting for ", "Wait ")
+        .Replace("Approaching dock", "Approach").Replace("Charging batteries", "Charging");
+}
+
+String Pad(String s, int n) { return s.Length >= n ? s.Substring(0, n) : s + new String(' ', n - s.Length); }
+
+String Pct(int v) { return v < 0 ? "  - " : (v + "%").PadLeft(4); }
+
+// flags for the fleet list / ship page
+String ShipFlags(TCShip t)
+{
+    if (t == null) return "no traffic";
+    String f = "";
+    if (t.emg) f += "EMG ";
+    if (t.flag == 2) f += "PARKED ";
+    else if (t.flag == 1) f += "QUEUE ";
+    if (t.prio < 0) f += "WAIT ";
+    if (t.limit >= 0) f += "GIVE ";
+    if (clearedShip == t.id || dockingShips.Contains(t.id)) f += "CLEARED ";
+    return f.Trim();
+}
+
+String BuildFleetScreen()
+{
+    String text = "PAM fleet | " + connectedShips.Count + " ships\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
+    text += Pad("Ship", 10) + Pad("State", 12) + " Crg  Bat  H2  Hole Flags\n";
+    for (int i = 0; i < connectedShips.Count; i++)
+    {
+        ShipInfo s = connectedShips[i];
+        TCShip t = FindTCShip(s);
+        String hole = "  -";
+        if (t != null && t.hole >= 0)
+        {
+            JobRec job = jobs.Find(q => q.key == t.job);
+            hole = ("" + (job != null ? job.order.IndexOf(t.hole) + 1 : t.hole + 1)).PadLeft(3);
+        }
+        text += Pad(s.name, 9) + " " + Pad(s.IsTimedOut() ? "NO CONTACT" : ShortState(s.stateText), 11) + " " +
+            Pct((int)(SafeDiv(s.currentVolume, s.maxVolume) * 100)) + " " + Pct(t != null ? t.bat : -1) + " " + Pct(t != null ? t.h2 : -1) + " " + hole + "  " + ShipFlags(t) + "\n";
+    }
+    return text;
+}
+
+String BuildShipScreen(String name)
+{
+    ShipInfo s = FindShip("", name);
+    if (s == null) return "Unknown ship: " + name;
+    TCShip t = FindTCShip(s);
+    String text = s.name + " | " + s.distance + " m from here" + (s.IsTimedOut() ? " | NO CONTACT" : "") + "\n" + "—————————————————————\n";
+    text += "State:  " + s.stateText + "\n" + "Status: " + s.statusMessage + "\n";
+    text += ProgressBar("Cargo", SafeDiv(s.currentVolume, s.maxVolume) * 100f, 100, 20, 8, 7) + "%\n";
+    if (t == null) return text + "(no traffic data: traffic off or out of range)\n";
+    text += "Battery " + Pct(t.bat).Trim() + "  H2 " + Pct(t.h2).Trim() + "  U " + t.ur + " kg\n";
+    text += "Speed " + Math.Round(t.vel.Length(), 1) + " m/s\n";
+    JobRec job = jobs.Find(q => q.key == t.job);
+    if (job != null)
+    {
+        int n = 0;
+        for (int i = 0; i < job.done.Length; i++) if (job.done[i] == '1') n++;
+        text += "Job " + (jobs.IndexOf(job) + 1) + ": " + n + "/" + job.done.Length + " done" + (t.hole >= 0 ? ", hole " + (job.order.IndexOf(t.hole) + 1) : "") + "\n";
+    }
+    text += "Right of way: " + Pick("waiting|normal|between holes|heading home|docking / emergency", t.prio + 1) + (t.metric >= 0 ? ", " + t.metric + " m to go" : "") + "\n";
+    text += "Docking: " + Pick("-|to the docking area|last leg|docked / undocking", t.phase) +
+        (clearedShip == t.id ? ", cleared" : dockingShips.Contains(t.id) ? ", cleared (on its last leg)" : "") + "\n";
+    String f = ShipFlags(t);
+    text += "Flags: " + (f == "" ? "-" : f) + "\n";
+    text += "Last contact: " + Math.Round((TimeNow() - t.time).TotalSeconds, 1) + " s\n";
+    return text;
+}
+
+String BuildLogScreen()
+{
+    String text = "Coordination log (newest first)\n" + "—————————————————————\n";
+    for (int i = 0; i < logLines.Count; i++) text += logLines[i] + "\n";
+    if (logLines.Count == 0) text += "(nothing yet)\n";
+    return text;
+}
+
+// ---- drawing ----
+MySpriteDrawFrame drawFrame;
+
+void DLine(Vector2 a, Vector2 b, Color c, float w)
+{
+    Vector2 d = b - a;
+    float len = d.Length();
+    if (len < 0.5f) return;
+    drawFrame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", (a + b) / 2, new Vector2(len, w), c, null, TextAlignment.CENTER, (float)Math.Atan2(d.Y, d.X)));
+}
+
+void DBox(Vector2 center, Vector2 size, Color c, String shape) { drawFrame.Add(new MySprite(SpriteType.TEXTURE, shape, center, size, c)); }
+
+void DText(String s, Vector2 at, Color c, float scale, TextAlignment align)
+{
+    MySprite t = MySprite.CreateText(s, "Debug", c, scale, align);
+    t.Position = at;
+    drawFrame.Add(t);
+}
+
+void DrawSpriteScreen(IMyTextPanel p, LCDMode mode, String param)
+{
+    if (p.ContentType != ContentType.SCRIPT) { p.ContentType = ContentType.SCRIPT; p.Script = ""; }
+    p.ScriptBackgroundColor = new Color(0, 0, 0);
+    Vector2 size = p.SurfaceSize, at = (p.TextureSize - size) / 2;
+    drawFrame = p.DrawFrame();
+    if (mode == LCDMode.Job) DrawJobMatrix(param, at, size);
+    else DrawSideMap(at, size);
+    drawFrame.Dispose();
+}
+
+// hole matrix: columns left to right, rows top to bottom, as seen from behind a ship drilling it
+void DrawJobMatrix(String param, Vector2 at, Vector2 size)
+{
+    int n = 1;
+    int.TryParse(param, out n);
+    if (n < 1 || n > jobs.Count) { DText(jobs.Count == 0 ? "No job" : "Job " + param + ": no such job (" + jobs.Count + ")", at + size / 2, Color.White, 1, TextAlignment.CENTER); return; }
+    JobRec job = jobs[n - 1];
+    int done = 0;
+    for (int i = 0; i < job.done.Length; i++) if (job.done[i] == '1') done++;
+    DText("Job " + n + ": " + done + "/" + job.done.Length + " holes done", at + new Vector2(size.X / 2, 4), Color.White, 0.9f, TextAlignment.CENTER);
+    float top = 40, bottom = 30;
+    float cell = Math.Min(size.X / job.w, (size.Y - top - bottom) / job.h);
+    Vector2 origin = at + new Vector2((size.X - cell * job.w) / 2, top + (size.Y - top - bottom - cell * job.h) / 2);
+    for (int c = 0; c < job.done.Length; c++)
+    {
+        Vector2 ctr = origin + new Vector2((c % job.w + 0.5f) * cell, (c / job.w + 0.5f) * cell);
+        JobShip owner = HoleOwner(job, c, null);
+        Color col = job.done[c] == '1' ? new Color(90, 90, 90) : owner != null ? Color.Orange : new Color(30, 60, 90);
+        DBox(ctr, new Vector2(cell * 0.9f, cell * 0.9f), col, "SquareSimple");
+        if (owner == null) continue;
+        String nm = ShipName(owner.id);
+        DText(nm.Substring(Math.Max(0, nm.Length - 2)).Trim(), ctr - new Vector2(0, cell * 0.3f), Color.Black, Math.Min(1.2f, cell / 40), TextAlignment.CENTER);
+    }
+    DText("grey done | orange: ship working | blue free", at + new Vector2(size.X / 2, size.Y - 24), Color.Gray, 0.6f, TextAlignment.CENTER);
+}
+
+// side view: horizontal = distance from the station towards the job, vertical = height (gravity),
+// each with its own scale (heights are exaggerated to be readable)
+void DrawSideMap(Vector2 at, Vector2 size)
+{
+    Vector3 o = Me.GetPosition();
+    Vector3 up = new Vector3();
+    for (int i = 0; i < tcShips.Count; i++) up += tcShips[i].up;
+    if (up.LengthSquared() < 0.01f) up = Me.WorldMatrix.Up;
+    up.Normalize();
+    // towards the first job (else the far end of a path, else the first ship)
+    Vector3 far = o;
+    if (jobs.Count > 0) { String[] k = jobs[0].key.Split('|'); far = new Vector3(float.Parse(k[0]), float.Parse(k[1]), float.Parse(k[2])); }
+    List<Vector3> pts = new List<Vector3>();
+    foreach (String ps in shipPaths.Values) { pts.Clear(); foreach (String w in ps.Split(':')) if (w != "") pts.Add(StringToVector(w)); break; }
+    if (far == o && pts.Count > 0) far = Vector3.Distance(pts[0], o) > Vector3.Distance(pts[pts.Count - 1], o) ? pts[0] : pts[pts.Count - 1];
+    if (far == o && tcShips.Count > 0) far = tcShips[0].pos;
+    Vector3 along = far - o - up * Vector3.Dot(far - o, up);
+    if (along.LengthSquared() < 1) along = Vector3.Cross(up, Me.WorldMatrix.Right);
+    along.Normalize();
+    // bounds
+    float x0 = 0, x1 = 20, y0 = -10, y1 = 10;
+    List<Vector3> all = new List<Vector3>(pts);
+    all.Add(far);
+    for (int i = 0; i < tcShips.Count; i++) all.Add(tcShips[i].pos);
+    for (int i = 0; i < all.Count; i++)
+    {
+        Vector3 d = all[i] - o;
+        float x = Vector3.Dot(d, along), y = Vector3.Dot(d, up);
+        x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y);
+    }
+    float mx = (x1 - x0) * 0.08f + 5, my = (y1 - y0) * 0.15f + 5;
+    x0 -= mx; x1 += mx; y0 -= my; y1 += my;
+    float top = 30, bottom = 26;
+    Vector2 area = new Vector2(size.X, size.Y - top - bottom);
+    float sx = area.X / (x1 - x0), sy = area.Y / (y1 - y0);
+    Func<Vector3, Vector2> P = v => { Vector3 d = v - o; return at + new Vector2((Vector3.Dot(d, along) - x0) * sx, top + (y1 - Vector3.Dot(d, up)) * sy); };
+
+    DText("Side view: station -> job | heights x" + Math.Round(sy / sx, 1), at + new Vector2(size.X / 2, 4), Color.White, 0.7f, TextAlignment.CENTER);
+    // ground line at the station's height
+    DLine(P(o + along * x0), P(o + along * x1), new Color(40, 40, 40), 1);
+    // path (fewer segments when they'd be shorter than ~3 px)
+    Vector2 last = new Vector2(-9999, -9999);
+    for (int i = 0; i < pts.Count; i++)
+    {
+        Vector2 q = P(pts[i]);
+        if (i > 0 && (q - last).Length() < 3 && i < pts.Count - 1) continue;
+        if (i > 0) DLine(last, q, Color.SkyBlue, 2);
+        last = q;
+    }
+    // station, job site
+    DBox(P(o), new Vector2(14, 14), Color.White, "SquareSimple");
+    DText("Station", P(o) + new Vector2(0, 10), Color.White, 0.6f, TextAlignment.CENTER);
+    for (int j = 0; j < jobs.Count; j++)
+    {
+        String[] k = jobs[j].key.Split('|');
+        Vector3 jp = new Vector3(float.Parse(k[0]), float.Parse(k[1]), float.Parse(k[2]));
+        int n = 0;
+        for (int i = 0; i < jobs[j].done.Length; i++) if (jobs[j].done[i] == '1') n++;
+        float half = jobs[j].w * jobs[j].tw / 2;
+        DLine(P(jp - along * half), P(jp + along * half), Color.Orange, 4);
+        DText("Job " + (j + 1) + " " + n + "/" + jobs[j].done.Length, P(jp) + new Vector2(0, 6), Color.Orange, 0.6f, TextAlignment.CENTER);
+    }
+    // ships: colour by what they do, a line where they're heading
+    for (int i = 0; i < tcShips.Count; i++)
+    {
+        TCShip t = tcShips[i];
+        Color c = t.emg ? Color.Red : t.limit >= 0 ? Color.Yellow : t.prio < 0 ? Color.Violet : TCParked(t) ? Color.Gray : Color.Lime;
+        Vector2 q = P(t.pos);
+        if (t.vel.LengthSquared() > 0.25f) DLine(q, P(t.pos + t.vel * 5), c, 2);
+        DBox(q, new Vector2(12, 12), c, "Circle");
+        DText(TCName(t), q - new Vector2(0, 26), c, 0.55f, TextAlignment.CENTER);
+    }
+    DText("green moving | yellow giving way | violet waiting | grey parked | red emergency", at + new Vector2(size.X / 2, size.Y - 22), Color.Gray, 0.5f, TextAlignment.CENTER);
 }

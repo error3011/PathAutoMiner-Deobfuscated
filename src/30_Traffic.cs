@@ -90,17 +90,24 @@ void UpdateTraffic()
     // idle ships send too: docked (their connector counts as taken) or hovering (an obstacle)
     if (++trafficTick < 3) return; // ~2 messages per second
     trafficTick = 0;
-    if (debugDraw) // for the controller's debug drawing: id;jobPos;left;down;target;rays;forward;path (every ~10 s)
+    Vector3 g = remoteControl.GetNaturalGravity();
+    if (g.LengthSquared() > 0.01f) g.Normalize();
+    // recorded path for the controller's map / debug drawing, every ~15 s
+    if (++dbgPathTick % 30 == 1) IGC.SendBroadcastMessage("[PAMPTH]", myGridId + ";" + DbgPath());
+    if (debugDraw) // for the controller's debug drawing: id;jobPos;left;down;target;rays;forward
     {
         IGC.SendBroadcastMessage("[PAMDBG]", myGridId + ";" + VectorToString(jobPosition.position) + ";" +
             VectorToString(jobState == JobState.NoJob ? new Vector3() : jobPosition.leftDir) + ";" + VectorToString(miningDown) + ";" +
-            VectorToString(navTargetPos + trafficShift) + ";" + String.Join(":", debugRays) + ";" + VectorToString(miningForward) + ";" + (++dbgPathTick % 20 == 1 ? DbgPath() : ""));
+            VectorToString(navTargetPos + trafficShift) + ";" + String.Join(":", debugRays) + ";" + VectorToString(miningForward));
         debugRays.Clear();
     }
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
-        ";" + (outOfService || emgStage == 1 || emgStage == 2 ? 2 : dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + (sentPrio = TrafficPrio()) + "," + (sentDest = (float)Math.Round(DestDist())) + ";" + Me.GetId());
+        ";" + (outOfService || emgStage == 1 || emgStage == 2 ? 2 : dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + (sentPrio = TrafficPrio()) + "," + (sentDest = (float)Math.Round(DestDist())) + ";" + Me.GetId() +
+        // for the controller's screens: battery %, hydrogen %, uranium kg, emergency, up (x10)
+        ";" + (batteryState == BatteryState.None ? -1 : (int)batteryPercent) + "," + (int)hydrogenPercent + "," + (int)uraniumAmount + "," + (emergency ? 1 : 0) + "," +
+        (int)(-g.X * 10) + "|" + (int)(-g.Y * 10) + "|" + (int)(-g.Z * 10));
 }
 
 void ParseTraffic(String data)

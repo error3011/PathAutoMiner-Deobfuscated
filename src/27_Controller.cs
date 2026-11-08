@@ -52,6 +52,7 @@ void ControllerMainLoop(string argument)
     if (isTick) UpdateJobCoordination(); // co-op jobs: hand out holes
     if (isTick) UpdateTrafficControl();  // all ships at once: who gives way
     if (isTick) UpdateStagedHome();      // "Move home" for all: one ship after the other
+    if (isTick) UpdateScreens();         // recorded paths for the map
     if (isTick && tcSendTick == 0) UpdateDebugDraw(); // 3D debug drawing (DebugAPI mod), twice a second
     UpdateControllerDisplays();
 }
@@ -232,7 +233,7 @@ void ScanControllerBlocks()
     SetupTaggedSurfaces(taggedBlocks);
     SetupDebugPanels();
     ScanDockArea();
-    SetLCDFormat(lcdPanels, setLCDFontAndSize, 1.15f, false);
+    SetLCDFormat(lcdPanels.FindAll(q => ModeOf(q) < LCDMode.Fleet), setLCDFontAndSize, 1.15f, false); // the new screens keep their own format
     SetLCDFormat(textSurfaces, setLCDFontAndSize, 1.15f, true);
 
     // Write the LCD mode template into empty Custom Data; flag outdated Custom Data.
@@ -256,12 +257,17 @@ void UpdateControllerDisplays()
 
     for (int i = 0; i < textSurfaces.Count; i++)
         textSurfaces[i].WriteText(BuildControllerScreenForMode(LCDMode.MainCompact, "0", false));
+    bool draw = ++screenTick % 6 == 0; // drawn screens about once a second
     for (int i = 0; i < lcdPanels.Count; i++)
     {
         LCDMode mode = LCDMode.Unknown;
         String param = "";
-        ParseLCDMode(lcdPanels[i], out mode, out param);
-        lcdPanels[i].WriteText(BuildControllerScreenForMode(mode, param, i == 0));
+        IMyTextPanel p = lcdPanels[i];
+        ParseLCDMode(p, out mode, out param);
+        if (SpriteMode(mode)) { if (draw) DrawSpriteScreen(p, mode, param); continue; }
+        if (p.ContentType != ContentType.TEXT_AND_IMAGE) p.ContentType = ContentType.TEXT_AND_IMAGE;
+        if (mode == LCDMode.Fleet && setLCDFontAndSize && p.Font != "Monospace") p.Font = "Monospace"; // table columns
+        p.WriteText(BuildControllerScreenForMode(mode, param, i == 0));
     }
     Echo(echoText + GetDebugDrawLegend());
     for (int i = 0; i < debugPanels.Count; i++)
@@ -406,8 +412,12 @@ String GetLCDModeHelp(bool withDefault)
     if (withDefault) text += "mode=main:1\n\n";
     text += "//Available modes:\n" + "//main:<Page>\n" + "//mainX:<Page>  (no empty lines)\n" + "//menu\n" +
         "//inventory\n" + "//menu:<shipname>\n" + "//inventory:<shipname>";
+    // (the check for outdated Custom Data looks for the text above: new modes only in the template)
+    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)";
     return text;
 }
+
+LCDMode ModeOf(IMyTerminalBlock panel) { LCDMode m; String s; ParseLCDMode(panel, out m, out s); return m; }
 
 void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
 {
@@ -422,6 +432,11 @@ void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
     else if (modeKey == "MENU") mode = LCDMode.Menu;
     else if (modeKey == "INVENTORY") mode = LCDMode.Inventory;
     else if (modeKey == "DEBUG") mode = LCDMode.Debug;
+    else if (modeKey == "FLEET") mode = LCDMode.Fleet;
+    else if (modeKey == "SHIP") mode = LCDMode.Ship;
+    else if (modeKey == "LOG") mode = LCDMode.Log;
+    else if (modeKey == "JOB") mode = LCDMode.Job;
+    else if (modeKey == "MAP") mode = LCDMode.Map;
     if (mode == LCDMode.Unknown) param = modeStr;
 }
 
@@ -437,6 +452,9 @@ String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel)
         controllerPageCount2 = 0;
     }
     String text = "";
+    if (mode == LCDMode.Fleet) return BuildFleetScreen();
+    if (mode == LCDMode.Ship) return BuildShipScreen(param);
+    if (mode == LCDMode.Log) return BuildLogScreen();
     if (mode == LCDMode.MainPaged)
     {
         int page = 0;
