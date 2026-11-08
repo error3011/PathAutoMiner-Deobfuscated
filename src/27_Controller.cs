@@ -413,7 +413,7 @@ String GetLCDModeHelp(bool withDefault)
     text += "//Available modes:\n" + "//main:<Page>\n" + "//mainX:<Page>  (no empty lines)\n" + "//menu\n" +
         "//inventory\n" + "//menu:<shipname>\n" + "//inventory:<shipname>";
     // (the check for outdated Custom Data looks for the text above: new modes only in the template)
-    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)";
+    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)\n//docks";
     return text;
 }
 
@@ -437,6 +437,7 @@ void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
     else if (modeKey == "LOG") mode = LCDMode.Log;
     else if (modeKey == "JOB") mode = LCDMode.Job;
     else if (modeKey == "MAP") mode = LCDMode.Map;
+    else if (modeKey == "DOCKS") mode = LCDMode.Docks;
     if (mode == LCDMode.Unknown) param = modeStr;
 }
 
@@ -457,6 +458,7 @@ String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel,
     String text = "";
     if (mode == LCDMode.Fleet) return BuildFleetScreen();
     if (mode == LCDMode.Ship) return BuildShipScreen(param);
+    if (mode == LCDMode.Docks) return BuildDocksScreen();
     if (mode == LCDMode.MainPaged)
     {
         int page = 0;

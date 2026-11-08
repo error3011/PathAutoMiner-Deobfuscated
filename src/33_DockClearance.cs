@@ -88,6 +88,7 @@ void ParseStation(String data)
     stationAckTime = TimeNow();
     // cleared ships: ship:kind:connector,... (several may be on their way to different connectors)
     stationCleared = 0; stationClearedKind = 0; stationConn = 0;
+    dockBlockedMe = f.Length >= 9 && ("," + f[8]).Contains("," + myGridId + ":"); // its connector's lane is blocked
     String[] cl = f[2].Split(',');
     for (int i = 0; i < cl.Length; i++)
     {
@@ -128,7 +129,7 @@ bool CheckDockClearance()
     if (!trafficEnabled || shipMode == ShipMode.Shuttle || homeConnId == 0) return true;
     RequestDock(1);
     if (!StationDeciding()) return true; // no station: ship-to-ship rules
-    if (!StationCleared(1)) { statusMessage = "Waiting for dock clearance"; return false; }
+    if (!StationCleared(1)) { statusMessage = WaitText(); return false; }
     ApplyStationDock();
     return true;
 }
@@ -188,6 +189,9 @@ bool HoldForDockArea(Vector3 cur, Vector3 next)
     dockQueued = true;
     return true;
 }
+
+bool dockBlockedMe = false;
+String WaitText() { return dockBlockedMe ? "Connector blocked (obstacle in its lane): waiting" : "Waiting for dock clearance"; }
 
 bool LowEnergy() { String m = statusMessage; bool low = !CheckEnergy(); statusMessage = m; return low; }
 

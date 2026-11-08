@@ -6,6 +6,7 @@
 //                  coloured by kind (drawn; text size = the LCD's font size)
 //   job:<n>        hole matrix of job n (drawn, as seen behind a ship drilling it)
 //   map            side view base -> job: path, job site, ships (drawn; wide LCD recommended)
+//   docks          the station's connectors: free / cleared / docking / docked / BLOCKED lane / damaged
 // The drawn ones redraw about once a second.
 
 List<String> logLines = new List<String>();
@@ -128,10 +129,46 @@ String BuildShipScreen(String name)
 // ---- text screens drawn in colour (main, menus, inventory, fleet, ship) ----
 Dictionary<IMyTextSurface, String> screenCache = new Dictionary<IMyTextSurface, String>();
 
+// connectors of the station (pool + ships' homes): state, ship, lane
+String BuildDocksScreen()
+{
+    String text = "Connectors" + (dockAreaStatus != "" ? " | " + dockAreaStatus : "") + "\n";
+    List<IMyShipConnector> list = new List<IMyShipConnector>(stationDocks);
+    foreach (long h in homeConns) { IMyShipConnector hc = StationConnector(h); if (hc != null && !list.Contains(hc)) list.Add(hc); }
+    if (list.Count == 0) return text + "(no [PAM-Dock] connectors, no ship asked yet)\n";
+    foreach (IMyShipConnector c in list)
+    {
+        LaneBlock b = LaneBlockOf(c.EntityId);
+        int d = dockingConns.IndexOf(c.EntityId);
+        String st = b != null ? "BLOCKED: " + b.what + " in its lane" : !c.IsFunctional ? "DAMAGED" : !c.Enabled ? "OFF" :
+            c.Status == MyShipConnectorStatus.Connected ? "docked: " + GridName(c.OtherConnector.CubeGrid) :
+            c.Status == MyShipConnectorStatus.Connectable ? "ready to lock" :
+            clearedShip != 0 && clearedKind == 1 && clearedConn == c.EntityId ? "cleared: " + ShipName(clearedShip) :
+            d >= 0 ? "docking: " + ShipName(dockingShips[d]) : "free";
+        bool cam = laneCameras.Exists(q => Vector3D.Distance(q.GetPosition(), c.GetPosition()) <= 10);
+        text += c.CustomName + (homeConns.Contains(c.EntityId) ? " (home)" : "") + ": " + st + (cam ? "" : " | no lane camera") + "\n";
+    }
+    return text;
+}
+
+String GridName(IMyCubeGrid g)
+{
+    TCShip t = tcShips.Find(q => q.id == g.EntityId);
+    return t != null ? TCName(t) : g.CustomName;
+}
+
 // colour of a text line by what it says (default: the LCD's font colour)
 Color LineColor(String l, LCDMode mode, Color def)
 {
     String t = l.Trim();
+    if (mode == LCDMode.Docks)
+    {
+        if (l.Contains(": BLOCKED")) return Color.Red;
+        if (l.Contains(": DAMAGED") || l.Contains(": OFF")) return Color.Coral;
+        if (l.Contains(": docked")) return Color.Gray;
+        if (l.Contains(": cleared") || l.Contains(": docking") || l.Contains(": ready")) return Color.SkyBlue;
+        if (l.Contains(": free")) return Color.LimeGreen;
+    }
     if (t.StartsWith("—") || t.StartsWith("---")) return Color.Gray;
     if (mode == LCDMode.Fleet && t.StartsWith("Ship ")) return Color.Gray; // table header
     if (l.Contains("EMERGENCY") || l.Contains(" EMG") || l.Contains("no answer") || l.Contains("NO CONTACT") || l.Contains("No signal") || l.Contains("Different version")) return Color.Red;

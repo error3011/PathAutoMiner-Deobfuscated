@@ -24,4 +24,4 @@ public enum SpiralResult   { Found, AllDone, Error }
 public enum DataResult     { Success, Failed, NoData, NewVersion }
 public enum CommandState   { None, Pending, Received, NoAnswer }
 public enum ConfigType     { WorkSpeed, Acceleration, MaxLoad, Ignore, MinBattery, MinUranium, MinHydrogen, TimerDelay, Overlap }
-public enum LCDMode        { Unknown, MainPaged, MainCompact, Menu, Inventory, Debug, MainPagedCompact, Fleet, Ship, Log, Job, Map }
+public enum LCDMode        { Unknown, MainPaged, MainCompact, Menu, Inventory, Debug, MainPagedCompact, Fleet, Ship, Log, Job, Map, Docks }

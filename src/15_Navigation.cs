@@ -420,7 +420,7 @@ void UpdateNavigation()
                 if (emergency && !outOfService) { EmergencyLand(); return; }
                 if (!dockHoldSet) { dockHoldSet = true; dockHoldPos = InDockZone(cur) ? shipPosition : cur; }
                 SetFlightTarget(dockHoldPos, 0); // keeps facing the way it flew in; turns to the dock once cleared
-                if (!outOfService) statusMessage = "Waiting for dock clearance";
+                if (!outOfService) statusMessage = WaitText();
                 return;
             }
             dockHoldSet = false;

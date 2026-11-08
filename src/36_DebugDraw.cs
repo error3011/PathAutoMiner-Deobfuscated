@@ -194,6 +194,14 @@ void UpdateDebugDraw()
     }
     for (int i = 0; i < laneCameras.Count; i++)
         dbg.Line(laneCameras[i].GetPosition(), laneCameras[i].GetPosition() + laneCameras[i].WorldMatrix.Forward * dockLaneLength, Color.Purple, 0.05f);
+    // blocked lanes: red from the lane camera to what's in the way, with what and which connector
+    foreach (LaneBlock b in laneBlocks)
+    {
+        IMyShipConnector bc = StationConnector(b.conn);
+        dbg.Line(b.cam, b.hit, Color.Red, 0.2f);
+        dbg.Point(b.hit, Color.Red, 0.6f);
+        dbg.Label("Lane blocked: " + b.what + (bc != null ? " (" + bc.CustomName + ")" : "") + (b.ship != 0 ? ", " + ShipName(b.ship) + " can't dock" : ""), b.hit, Color.Red);
+    }
     if (clearedShip != 0 && clearedConn != 0)
     {
         IMyShipConnector c = StationConnector(clearedConn);
@@ -232,6 +240,6 @@ String GetDebugDrawLegend()
         "Points: grey hole done, orange claimed, white free\n" +
         "Line up from a hole: where ships line up over it and come down\n" +
         "Violet: waiting ring; sky blue: recorded path\n" +
-        "Cyan box: docking area, purple: lane cameras\n" +
+        "Cyan box: docking area, purple: lane cameras, red: lane blocked\n" +
         "Thick green: ship cleared to its connector\n";
 }

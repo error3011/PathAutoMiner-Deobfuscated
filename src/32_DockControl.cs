@@ -59,9 +59,17 @@ bool IsDockFree(IMyShipConnector c)
     return c != null && c.IsFunctional && c.Enabled && c.Status == MyShipConnectorStatus.Unconnected;
 }
 
-// Raycast the approach lane of a connector with the [PAM-Lane] camera next to it (within 10 m).
+// Raycast the approach lane of a connector with the [PAM-Lane] camera next to it (within 10 m). Anything
+// in it but the station, the ship coming in (also its parts: hits inside its size) and PAM ships passing
+// through (traffic handles them) blocks the lane;
+// the block is kept 3 s after the last hit (no flapping while the camera charges).
+class LaneBlock { public long conn, ship; public String what; public Vector3D cam, hit; public DateTime last; }
+List<LaneBlock> laneBlocks = new List<LaneBlock>();
+HashSet<long> homeConns = new HashSet<long>(); // ships' home connectors seen in requests (connector screen)
+
 bool IsLaneClear(IMyShipConnector c, long ship)
 {
+    TCShip t = tcShips.Find(q => q.id == ship);
     for (int i = 0; i < laneCameras.Count; i++)
     {
         IMyCameraBlock cam = laneCameras[i];
@@ -69,10 +77,33 @@ bool IsLaneClear(IMyShipConnector c, long ship)
         Vector3D end = cam.GetPosition() + c.WorldMatrix.Forward * dockLaneLength;
         if (!cam.CanScan(end)) continue; // camera not facing along the lane, or charging
         MyDetectedEntityInfo hit = cam.Raycast(end);
-        if (!hit.IsEmpty() && hit.EntityId != stationGrid.EntityId && hit.EntityId != ship && hit.Type != MyDetectedEntityType.FloatingObject)
-        { dockAreaStatus = "Lane blocked: " + c.CustomName; return false; }
+        if (hit.IsEmpty() || hit.EntityId == stationGrid.EntityId || hit.EntityId == ship || hit.Type == MyDetectedEntityType.FloatingObject) continue;
+        if (t != null && hit.HitPosition.HasValue && Vector3D.Distance(hit.HitPosition.Value, t.pos) < t.dia * 0.6f) continue;
+        TCShip other = tcShips.Find(q => q.id == hit.EntityId);
+        if (other != null && other.vel.LengthSquared() > 0.25f) continue; // a PAM ship passing through: traffic rules handle that
+        LaneBlock b = LaneBlockOf(c.EntityId);
+        if (b == null) { b = new LaneBlock(); b.conn = c.EntityId; laneBlocks.Add(b); AddLog("Dock: " + c.CustomName + " blocked (" + hit.Name + " in its lane)"); }
+        b.what = hit.Name; b.cam = cam.GetPosition(); b.hit = hit.HitPosition.HasValue ? hit.HitPosition.Value : end; b.last = TimeNow();
     }
-    return true;
+    LaneBlock lb = LaneBlockOf(c.EntityId);
+    if (lb == null) return true;
+    dockAreaStatus = "Lane blocked: " + c.CustomName;
+    return false;
+}
+
+LaneBlock LaneBlockOf(long conn) { return laneBlocks.Find(q => q.conn == conn); }
+
+String blockedShips = ""; // "ship:connector," ships told their connector's lane is blocked
+
+// the lane to the ship's connector is clear; if not, the ship is told (and the block remembers it)
+bool LaneOk(long conn, long ship)
+{
+    IMyShipConnector c = StationConnector(conn);
+    if (c == null || IsLaneClear(c, ship)) return true;
+    LaneBlock b = LaneBlockOf(conn);
+    if (b.ship != ship) AddLog("Dock: " + ShipName(ship) + " can't dock at " + c.CustomName + " (lane blocked), waits for another");
+    b.ship = ship;
+    return false;
 }
 
 // Something moving in the docking area that isn't the cleared ship?
@@ -98,14 +129,14 @@ long PickDock(DockRequest r)
 {
     IMyShipConnector home = StationConnector(r.home);
     if (IsDockFree(home) && !DockTaken(home.EntityId) && !r.bad.Contains("," + home.EntityId + ",") && IsLaneClear(home, r.ship)) return home.EntityId;
-    if (!r.canUsePool || home == null) return 0; // home removed: the pool poses are relative to it
+    if (!r.canUsePool) return 0; // home removed: any usable pool connector (nearest to the first one)
     IMyShipConnector best = null;
     double bestDist = 0;
     for (int i = 0; i < stationDocks.Count; i++)
     {
         IMyShipConnector c = stationDocks[i];
-        if (!IsDockFree(c) || DockTaken(c.EntityId) || (r.usable != null && !r.usable.Contains("," + c.EntityId + ",")) || r.bad.Contains("," + c.EntityId + ",")) continue;
-        double d = Vector3D.Distance(c.GetPosition(), home.GetPosition());
+        if (!IsDockFree(c) || StationConnector(c.EntityId) == null || DockTaken(c.EntityId) || (r.usable != null && !r.usable.Contains("," + c.EntityId + ",")) || r.bad.Contains("," + c.EntityId + ",")) continue;
+        double d = Vector3D.Distance(c.GetPosition(), (home ?? stationDocks[0]).GetPosition());
         if (best == null || d < bestDist) { if (IsLaneClear(c, r.ship)) { best = c; bestDist = d; } }
     }
     return best == null ? 0 : best.EntityId;
@@ -176,7 +207,11 @@ void HandleDockMessage(String data)
         else if (f[0] == "R" && f.Length >= 5)
         {
             long home = long.Parse(f[3]);
-            if (StationConnector(home) == null) return; // that ship's home is not on this station
+            // that ship's home is not on this station (or was removed: then its usable pool connectors say so)
+            bool mine = StationConnector(home) != null;
+            if (!mine && f.Length >= 6) foreach (String u in f[5].Split(',')) { long uid; if (long.TryParse(u, out uid) && StationConnector(uid) != null) mine = true; }
+            if (!mine) return;
+            homeConns.Add(home);
             DockRequest r = null;
             for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == ship) r = dockRequests[i];
             if (r == null) { r = new DockRequest(); r.ship = ship; r.first = TimeNow(); dockRequests.Add(r); }
@@ -215,6 +250,22 @@ void RunDockControl()
         for (int k = 0; k < dockRequests.Count; k++) if (dockRequests[k].ship == dockingShips[i]) asking = true;
         if (!asking) { dockingShips.RemoveAt(i); dockingConns.RemoveAt(i); }
     }
+    // lane blocks gone 3 s ago: connector usable again
+    for (int i = laneBlocks.Count - 1; i >= 0; i--)
+        if ((TimeNow() - laneBlocks[i].last).TotalSeconds > 3)
+        {
+            IMyShipConnector bc = StationConnector(laneBlocks[i].conn);
+            AddLog("Dock: " + (bc != null ? bc.CustomName : "connector") + " lane clear again");
+            laneBlocks.RemoveAt(i);
+        }
+    // something got into the lane of a connector a ship is coming to: that ship can't dock there ->
+    // drop its clearance (it keeps its request and place, gets another connector or waits)
+    blockedShips = "";
+    if (clearedShip != 0 && clearedKind == 1 && !LaneOk(clearedConn, clearedShip)) clearedShip = 0;
+    for (int i = dockingShips.Count - 1; i >= 0; i--)
+        if (!LaneOk(dockingConns[i], dockingShips[i])) { dockingShips.RemoveAt(i); dockingConns.RemoveAt(i); }
+    for (int i = 0; i < dockRequests.Count; i++)
+        foreach (LaneBlock b in laneBlocks) if (b.ship == dockRequests[i].ship) blockedShips += dockRequests[i].ship + ":" + b.conn + ",";
     // the cleared ship is on its last leg to its connector: it keeps the clearance, the next may come
     if (clearedShip != 0 && clearedKind == 1)
         for (int i = 0; i < tcShips.Count; i++)
@@ -244,7 +295,7 @@ String BuildStationMessage()
         msg += (i > 0 ? ":" : "") + VectorToString(z.GetPosition()) + "," + VectorToString(z.WorldMatrix.Forward) + "," + VectorToString(z.WorldMatrix.Up) + "," +
             z.LeftExtend + "," + z.RightExtend + "," + z.TopExtend + "," + z.BottomExtend + "," + z.FrontExtend + "," + z.BackExtend;
     }
-    return msg;
+    return msg + ";" + blockedShips; // ships whose connector's lane is blocked: ship:connector,...
 }
 
 String GetDockAreaLine()

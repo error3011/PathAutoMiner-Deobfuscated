@@ -110,7 +110,20 @@ void UpdateTraffic()
         ";" + (outOfService || emgStage == 1 || emgStage == 2 ? 2 : dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + (sentPrio = TrafficPrio()) + "," + (sentDest = (float)Math.Round(DestDist())) + ";" + Me.GetId() +
         // for the controller's screens: battery %, hydrogen %, uranium kg, emergency, flight state, up (x10)
         ";" + (batteryState == BatteryState.None ? -1 : (int)batteryPercent) + "," + (int)hydrogenPercent + "," + (int)uraniumAmount + "," + (emergency ? 1 : 0) + "," + (int)currentNavState + "," +
-        (int)(-g.X * 10) + "|" + (int)(-g.Y * 10) + "|" + (int)(-g.Z * 10));
+        (int)(-g.X * 10) + "|" + (int)(-g.Y * 10) + "|" + (int)(-g.Z * 10) +
+        ";" + (TimeNow() < reopenSend ? reopenCell : -1)); // hole reopened with PREV (co-op)
+}
+
+// PREV in co-op: the hole moved back to counts as not finished for everyone (sent for 15 s); during
+// that time a "finished" mark for it from the others doesn't count
+int reopenCell = -1;
+DateTime reopenUntil = DateTime.MinValue, reopenSend = DateTime.MinValue;
+
+void Reopen(int cell, bool mine)
+{
+    reopenCell = cell; reopenUntil = TimeNow().AddSeconds(15);
+    if (mine) reopenSend = reopenUntil;
+    SetHoleDone(cell, false);
 }
 
 void ParseTraffic(String data)
@@ -130,7 +143,11 @@ void ParseTraffic(String data)
         ship.job = f[4];
         ship.hole = int.Parse(f[5]);
         ship.time = TimeNow();
-        if (ship.job != "" && ship.job == JobKey()) MergeDoneHoles(f[6]);
+        if (ship.job != "" && ship.job == JobKey())
+        {
+            if (f.Length >= 14 && f[13] != "-1") Reopen(int.Parse(f[13]), false);
+            MergeDoneHoles(f[6]);
+        }
         ship.dock = 0; ship.dockPhase = 0;
         if (f.Length >= 8)
         {
@@ -507,7 +524,7 @@ void MergeDoneHoles(String other)
     EnsureDoneHoles();
     if (other.Length != doneHoles.Length) return;
     char[] h = doneHoles.ToCharArray();
-    for (int i = 0; i < h.Length; i++) if (other[i] == '1') h[i] = '1';
+    for (int i = 0; i < h.Length; i++) if (other[i] == '1' && (i != reopenCell || TimeNow() > reopenUntil)) h[i] = '1';
     doneHoles = new String(h);
 }
 

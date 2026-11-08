@@ -23,6 +23,8 @@ class JobRec
     public String done;
     public List<int> order = new List<int>();
     public List<JobShip> ships = new List<JobShip>();
+    public int reopen = -1;        // hole reopened with PREV: "finished" marks for it don't count until
+    public DateTime reopenUntil;
 }
 
 List<JobRec> jobs = new List<JobRec>();
@@ -100,13 +102,21 @@ void HandleJobTraffic(String data)
         job.done = new String('0', job.w * job.h);
         jobs.Add(job);
     }
+    // hole reopened by the ship (PREV): not finished any more, for everyone
+    int ro = f.Length >= 14 ? int.Parse(f[13]) : -1;
+    if (ro >= 0 && ro < job.done.Length)
+    {
+        if (job.done[ro] == '1') AddLog("Job: hole " + (job.order.IndexOf(ro) + 1) + " reopened by " + ShipName(long.Parse(f[0])));
+        char[] r = job.done.ToCharArray(); r[ro] = '0'; job.done = new String(r);
+        job.reopen = ro; job.reopenUntil = TimeNow().AddSeconds(15);
+    }
     // finished holes reported by the ship
     String d = f[6];
     if (d.Length == job.done.Length)
     {
         char[] c = job.done.ToCharArray();
         for (int i = 0; i < c.Length; i++)
-            if (d[i] == '1' && c[i] != '1')
+            if (d[i] == '1' && c[i] != '1' && (i != job.reopen || TimeNow() > job.reopenUntil))
             {
                 c[i] = '1';
                 if (fresh) continue;
