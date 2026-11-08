@@ -5170,7 +5170,7 @@ void UpdateControllerDisplays()
         "*[SENDALL] = Cmd to all ships:\n" + " e.g.: \"SENDALL homepos\"\n\n";
 
     for (int i = 0; i < textSurfaces.Count; i++)
-        textSurfaces[i].WriteText(BuildControllerScreenForMode(LCDMode.MainCompact, "0", false));
+        textSurfaces[i].WriteText(BuildControllerScreenForMode(LCDMode.MainCompact, "0", false, LinesFor(textSurfaces[i])));
     bool draw = ++screenTick % 6 == 0; // drawn screens about once a second
     for (int i = 0; i < lcdPanels.Count; i++)
     {
@@ -5181,7 +5181,7 @@ void UpdateControllerDisplays()
         if (SpriteMode(mode)) { if (draw) DrawSpriteScreen(p, mode, param); continue; }
         if (p.ContentType != ContentType.TEXT_AND_IMAGE) p.ContentType = ContentType.TEXT_AND_IMAGE;
         if (mode == LCDMode.Fleet && setLCDFontAndSize && p.Font != "Monospace") p.Font = "Monospace"; // table columns
-        p.WriteText(BuildControllerScreenForMode(mode, param, i == 0));
+        p.WriteText(BuildControllerScreenForMode(mode, param, i == 0, LinesFor(p)));
     }
     Echo(echoText + GetDebugDrawLegend());
     for (int i = 0; i < debugPanels.Count; i++)
@@ -5356,9 +5356,12 @@ void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
 }
 
 // Renders one LCD. "main:<page>" pages share one scrolling list; firstPanel resets the page bookkeeping.
-String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel)
+// text lines that fit on a screen: its height (minus padding) over the line height at its font size
+// (~30 px per line at size 1.0 on a 512 px LCD)
+int LinesFor(IMyTextSurface s) { return Math.Max(5, (int)(s.SurfaceSize.Y * (1 - s.TextPadding / 50f) / (30f * Math.Max(0.1f, s.FontSize)))); }
+
+String BuildControllerScreenForMode(LCDMode mode, String param, bool firstPanel, int linesPerPage)
 {
-    int linesPerPage = 15;
     if (firstPanel)
     {
         controllerPageIdx1 = controllerPageCount1;
