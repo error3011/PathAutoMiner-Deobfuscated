@@ -5226,9 +5226,11 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
         String list = "";
         if (AddMenuItem(ref list, sel, idx++, applyAction, " Send command to all")) NavigateToMenu(MenuPage.SendCommandAll);
         int selectedLine = 0;
+        int visibleLines = Math.Max(3, pageSize - headerLines) + Math.Max(0, pageOffset - 1) * pageSize;
+        bool gap = compact && 1 + connectedShips.Count * 3 <= visibleLines; // blank line between ships only when they all fit
         for (int s = 0; s < connectedShips.Count; s++)
         {
-            if (compact) list += "\n";
+            if (gap) list += "\n";
             ShipInfo ship = connectedShips[s];
             if (sel == idx || sel == idx + 1) selectedShip = ship;
             if (idx == sel) selectedLine = list.Split('\n').Length - 1;
@@ -5245,8 +5247,6 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
                 NavigateToMenu(MenuPage.ShipInventory);
             }
         }
-        int visibleLines = Math.Max(3, pageSize - headerLines);
-        visibleLines += Math.Max(0, (pageOffset - 1)) * pageSize;
         text += ScrollText(visibleLines, list, selectedLine, ref scrollState);
     }
     else if (currentMenu == MenuPage.SendCommand || currentMenu == MenuPage.SendCommandAll)
@@ -5841,8 +5841,8 @@ void UpdateTraffic()
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
         ";" + (outOfService || emgStage == 1 || emgStage == 2 ? 2 : dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + (sentPrio = TrafficPrio()) + "," + (sentDest = (float)Math.Round(DestDist())) + ";" + Me.GetId() +
-        // for the controller's screens: battery %, hydrogen %, uranium kg, emergency, up (x10)
-        ";" + (batteryState == BatteryState.None ? -1 : (int)batteryPercent) + "," + (int)hydrogenPercent + "," + (int)uraniumAmount + "," + (emergency ? 1 : 0) + "," +
+        // for the controller's screens: battery %, hydrogen %, uranium kg, emergency, flight state, up (x10)
+        ";" + (batteryState == BatteryState.None ? -1 : (int)batteryPercent) + "," + (int)hydrogenPercent + "," + (int)uraniumAmount + "," + (emergency ? 1 : 0) + "," + (int)currentNavState + "," +
         (int)(-g.X * 10) + "|" + (int)(-g.Y * 10) + "|" + (int)(-g.Z * 10));
 }
 
@@ -7221,7 +7221,7 @@ class TCShip
     public String job = "";
     public int phase;
     public DateTime time;
-    public int hole = -1, flag, bat = -1, h2, ur; // claimed hole, 1 queued / 2 parked, energy (screens)
+    public int hole = -1, flag, bat = -1, h2, ur, nav = -1; // claimed hole, 1 queued / 2 parked, energy, flight state (screens)
     public bool emg;
     public Vector3 up;
 }
@@ -7266,7 +7266,8 @@ void HandleTrafficControl(String data)
     if (f.Length >= 13)
     {
         String[] e = f[12].Split(',');
-        s.bat = int.Parse(e[0]); s.h2 = int.Parse(e[1]); s.ur = int.Parse(e[2]); s.emg = e[3] == "1"; s.up = StringToVector(e[4]) / 10;
+        s.bat = int.Parse(e[0]); s.h2 = int.Parse(e[1]); s.ur = int.Parse(e[2]); s.emg = e[3] == "1";
+        s.nav = e.Length >= 6 ? int.Parse(e[4]) : -1; s.up = StringToVector(e[e.Length - 1]) / 10;
     }
     if (isNew) AddLog("Contact: " + TCName(s));
 }
@@ -7893,7 +7894,9 @@ String ShipFlags(TCShip t)
 String BuildFleetScreen()
 {
     String text = "PAM fleet | " + connectedShips.Count + " ships\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
-    text += Pad("Ship", 10) + Pad("State", 12) + " Crg  Bat  H2  Hole Flags\n";
+    int nw = 6; // name column: as wide as the longest name (max 20 characters)
+    for (int i = 0; i < connectedShips.Count; i++) nw = Math.Min(21, Math.Max(nw, connectedShips[i].name.Length + 1));
+    text += Pad("Ship", nw) + Pad("State", 15) + " Crg  Bat  H2  Hole Flags\n";
     for (int i = 0; i < connectedShips.Count; i++)
     {
         ShipInfo s = connectedShips[i];
@@ -7904,7 +7907,7 @@ String BuildFleetScreen()
             JobRec job = jobs.Find(q => q.key == t.job);
             hole = ("" + (job != null ? job.order.IndexOf(t.hole) + 1 : t.hole + 1)).PadLeft(3);
         }
-        text += Pad(s.name, 9) + " " + Pad(s.IsTimedOut() ? "NO CONTACT" : ShortState(s.stateText), 11) + " " +
+        text += Pad(s.name, nw - 1) + " " + Pad(s.IsTimedOut() ? "NO CONTACT" : ShortState(t != null && t.nav >= 0 ? GetNavStateName((NavState)t.nav) : s.stateText), 14) + " " +
             Pct((int)(SafeDiv(s.currentVolume, s.maxVolume) * 100)) + " " + Pct(t != null ? t.bat : -1) + " " + Pct(t != null ? t.h2 : -1) + " " + hole + "  " + ShipFlags(t) + "\n";
     }
     return text;
@@ -7916,9 +7919,10 @@ String BuildShipScreen(String name)
     if (s == null) return "Unknown ship: " + name;
     TCShip t = FindTCShip(s);
     String text = s.name + " | " + s.distance + " m from here" + (s.IsTimedOut() ? " | NO CONTACT" : "") + "\n" + "—————————————————————\n";
-    text += "State:  " + s.stateText + "\n" + "Status: " + s.statusMessage + "\n";
+    text += "Job:    " + s.stateText + "\n" + "Status: " + s.statusMessage + "\n";
     text += ProgressBar("Cargo", SafeDiv(s.currentVolume, s.maxVolume) * 100f, 100, 20, 8, 7) + "%\n";
     if (t == null) return text + "(no traffic data: traffic off or out of range)\n";
+    if (t.nav >= 0) text += "Doing:  " + GetNavStateName((NavState)t.nav) + "\n";
     text += "Battery " + Pct(t.bat).Trim() + "  H2 " + Pct(t.h2).Trim() + "  U " + t.ur + " kg\n";
     text += "Speed " + Math.Round(t.vel.Length(), 1) + " m/s\n";
     JobRec job = jobs.Find(q => q.key == t.job);

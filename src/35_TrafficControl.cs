@@ -22,7 +22,7 @@ class TCShip
     public String job = "";
     public int phase;
     public DateTime time;
-    public int hole = -1, flag, bat = -1, h2, ur; // claimed hole, 1 queued / 2 parked, energy (screens)
+    public int hole = -1, flag, bat = -1, h2, ur, nav = -1; // claimed hole, 1 queued / 2 parked, energy, flight state (screens)
     public bool emg;
     public Vector3 up;
 }
@@ -67,7 +67,8 @@ void HandleTrafficControl(String data)
     if (f.Length >= 13)
     {
         String[] e = f[12].Split(',');
-        s.bat = int.Parse(e[0]); s.h2 = int.Parse(e[1]); s.ur = int.Parse(e[2]); s.emg = e[3] == "1"; s.up = StringToVector(e[4]) / 10;
+        s.bat = int.Parse(e[0]); s.h2 = int.Parse(e[1]); s.ur = int.Parse(e[2]); s.emg = e[3] == "1";
+        s.nav = e.Length >= 6 ? int.Parse(e[4]) : -1; s.up = StringToVector(e[e.Length - 1]) / 10;
     }
     if (isNew) AddLog("Contact: " + TCName(s));
 }

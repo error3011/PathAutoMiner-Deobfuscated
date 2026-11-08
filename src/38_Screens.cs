@@ -77,7 +77,9 @@ String ShipFlags(TCShip t)
 String BuildFleetScreen()
 {
     String text = "PAM fleet | " + connectedShips.Count + " ships\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
-    text += Pad("Ship", 10) + Pad("State", 12) + " Crg  Bat  H2  Hole Flags\n";
+    int nw = 6; // name column: as wide as the longest name (max 20 characters)
+    for (int i = 0; i < connectedShips.Count; i++) nw = Math.Min(21, Math.Max(nw, connectedShips[i].name.Length + 1));
+    text += Pad("Ship", nw) + Pad("State", 15) + " Crg  Bat  H2  Hole Flags\n";
     for (int i = 0; i < connectedShips.Count; i++)
     {
         ShipInfo s = connectedShips[i];
@@ -88,7 +90,7 @@ String BuildFleetScreen()
             JobRec job = jobs.Find(q => q.key == t.job);
             hole = ("" + (job != null ? job.order.IndexOf(t.hole) + 1 : t.hole + 1)).PadLeft(3);
         }
-        text += Pad(s.name, 9) + " " + Pad(s.IsTimedOut() ? "NO CONTACT" : ShortState(s.stateText), 11) + " " +
+        text += Pad(s.name, nw - 1) + " " + Pad(s.IsTimedOut() ? "NO CONTACT" : ShortState(t != null && t.nav >= 0 ? GetNavStateName((NavState)t.nav) : s.stateText), 14) + " " +
             Pct((int)(SafeDiv(s.currentVolume, s.maxVolume) * 100)) + " " + Pct(t != null ? t.bat : -1) + " " + Pct(t != null ? t.h2 : -1) + " " + hole + "  " + ShipFlags(t) + "\n";
     }
     return text;
@@ -100,9 +102,10 @@ String BuildShipScreen(String name)
     if (s == null) return "Unknown ship: " + name;
     TCShip t = FindTCShip(s);
     String text = s.name + " | " + s.distance + " m from here" + (s.IsTimedOut() ? " | NO CONTACT" : "") + "\n" + "—————————————————————\n";
-    text += "State:  " + s.stateText + "\n" + "Status: " + s.statusMessage + "\n";
+    text += "Job:    " + s.stateText + "\n" + "Status: " + s.statusMessage + "\n";
     text += ProgressBar("Cargo", SafeDiv(s.currentVolume, s.maxVolume) * 100f, 100, 20, 8, 7) + "%\n";
     if (t == null) return text + "(no traffic data: traffic off or out of range)\n";
+    if (t.nav >= 0) text += "Doing:  " + GetNavStateName((NavState)t.nav) + "\n";
     text += "Battery " + Pct(t.bat).Trim() + "  H2 " + Pct(t.h2).Trim() + "  U " + t.ur + " kg\n";
     text += "Speed " + Math.Round(t.vel.Length(), 1) + " m/s\n";
     JobRec job = jobs.Find(q => q.key == t.job);

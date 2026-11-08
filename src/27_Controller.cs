@@ -312,9 +312,11 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
         String list = "";
         if (AddMenuItem(ref list, sel, idx++, applyAction, " Send command to all")) NavigateToMenu(MenuPage.SendCommandAll);
         int selectedLine = 0;
+        int visibleLines = Math.Max(3, pageSize - headerLines) + Math.Max(0, pageOffset - 1) * pageSize;
+        bool gap = compact && 1 + connectedShips.Count * 3 <= visibleLines; // blank line between ships only when they all fit
         for (int s = 0; s < connectedShips.Count; s++)
         {
-            if (compact) list += "\n";
+            if (gap) list += "\n";
             ShipInfo ship = connectedShips[s];
             if (sel == idx || sel == idx + 1) selectedShip = ship;
             if (idx == sel) selectedLine = list.Split('\n').Length - 1;
@@ -331,8 +333,6 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
                 NavigateToMenu(MenuPage.ShipInventory);
             }
         }
-        int visibleLines = Math.Max(3, pageSize - headerLines);
-        visibleLines += Math.Max(0, (pageOffset - 1)) * pageSize;
         text += ScrollText(visibleLines, list, selectedLine, ref scrollState);
     }
     else if (currentMenu == MenuPage.SendCommand || currentMenu == MenuPage.SendCommandAll)
