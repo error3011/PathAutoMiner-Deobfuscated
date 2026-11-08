@@ -2084,8 +2084,17 @@ void UpdateNavigation()
             if (claimed < 0)
             {
                 if (!CheckEnergy()) { SetNavState(NavState.ReturnToDock); return; }
-                // -1: short wait for the controller's answer, where it is. -2: every hole left is taken:
-                // wait beside the job area, backed off from the surface, out of the other ships' way
+                // -2: every hole left is being worked by another ship (they keep their holes, none will
+                // free up): nothing to do here -> home, dock, and stop there (job paused; CONT resumes)
+                if (claimed == -2 && homeDock.isSet)
+                {
+                    coopWaiting = false;
+                    SetNavState(NavState.FlyToPath); SetStopAtState(NavState.Unloading); lastJobState = JobState.MoveHome;
+                    statusMessage = "No free hole left: going home";
+                    return;
+                }
+                // -1: short wait for the controller's answer, where it is. -2 without a home: wait beside
+                // the job area, backed off from the surface, out of the other ships' way
                 if (!coopWaiting || (claimed == -2) != coopWaitAside)
                 {
                     coopWaiting = true; coopWaitAside = claimed == -2;

@@ -14,8 +14,8 @@ flowchart TD
     U1 --> JA[FlyToJobArea: follow path<br/>lane offset, cameras, traffic]
     JA --> XY[FlyToXY: claim a hole]
     XY -->|controller assigns / peers' claims| H{Free hole?}
-    H -->|none yet| WR[Wait on the ring above the job<br/>own spot by rank; right of way -1]
-    WR --> XY
+    H -->|all left taken by others| GH[Fly home, dock, unload, stop<br/>job paused; CONT resumes]
+    GH --> FP
     H -->|yes| FX[Fly to hole top, drills OFF<br/>not adjacent: approach from above<br/>10 m/s cap near the job]
     FX -->|stuck 5 s: ground in the way| M
     FX -->|at hole top, lined up| M[Mining: drills ON, down to depth]
