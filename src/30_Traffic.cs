@@ -90,11 +90,11 @@ void UpdateTraffic()
     // idle ships send too: docked (their connector counts as taken) or hovering (an obstacle)
     if (++trafficTick < 3) return; // ~2 messages per second
     trafficTick = 0;
-    if (debugDraw) // for the controller's debug drawing: id;jobPos;left;down;target;rays
+    if (debugDraw) // for the controller's debug drawing: id;jobPos;left;down;target;rays;forward;path (every ~10 s)
     {
         IGC.SendBroadcastMessage("[PAMDBG]", myGridId + ";" + VectorToString(jobPosition.position) + ";" +
             VectorToString(jobState == JobState.NoJob ? new Vector3() : jobPosition.leftDir) + ";" + VectorToString(miningDown) + ";" +
-            VectorToString(navTargetPos + trafficShift) + ";" + String.Join(":", debugRays));
+            VectorToString(navTargetPos + trafficShift) + ";" + String.Join(":", debugRays) + ";" + VectorToString(miningForward) + ";" + (++dbgPathTick % 20 == 1 ? DbgPath() : ""));
         debugRays.Clear();
     }
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
@@ -177,6 +177,15 @@ Vector3 GetLaneOffset(int idx, int pathDir)
 Vector3 trafficMyVel = new Vector3();
 bool sidestep = false; // moving out of the way of a passing ship
 List<String> debugRays = new List<String>();
+int dbgPathTick = 0;
+
+// recorded path for the controller's debug drawing, whole metres
+String DbgPath()
+{
+    String s = "";
+    for (int i = 0; i < waypoints.Count; i++) { Vector3 w = waypoints[i].position; s += (i > 0 ? ":" : "") + (int)w.X + "|" + (int)w.Y + "|" + (int)w.Z; }
+    return s;
+}
 
 // Docking, undocking and backing out of a hole: traffic only slows/holds the ship, no side step
 // (the ship has to stay on its line to the connector or hole).

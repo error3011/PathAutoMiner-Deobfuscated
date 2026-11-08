@@ -50,14 +50,16 @@ class DebugAPI
 class DbgShip
 {
     public long id;
-    public Vector3 jobPos, left, down, target;
+    public Vector3 jobPos, left, down, target, fwd;
     public bool hasJob;
+    public String path = ""; // recorded path, "x|y|z:..." (ships send it every ~10 s)
     public List<Vector3> rayFrom = new List<Vector3>(), rayTo = new List<Vector3>();
     public List<bool> rayHit = new List<bool>();
     public DateTime time;
 }
 
 DebugAPI dbg = null;
+int dbgTick = 0;
 IMyBroadcastListener dbgListener = null;
 List<DbgShip> dbgShips = new List<DbgShip>();
 
@@ -74,6 +76,7 @@ void HandleDebugMessage(String data)
     s.hasJob = s.left.LengthSquared() > 0.5f;
     s.target = StringToVector(f[4]);
     s.time = TimeNow();
+    if (f.Length >= 8) { s.fwd = StringToVector(f[6]); if (f[7] != "") s.path = f[7]; }
     if (f[5] == "") return; // keep the last rays until new ones come
     s.rayFrom.Clear(); s.rayTo.Clear(); s.rayHit.Clear();
     String[] rays = f[5].Split(':');
@@ -98,8 +101,21 @@ void UpdateDebugDraw()
         if (data != null) try { HandleDebugMessage(data); } catch { }
     }
     for (int i = dbgShips.Count - 1; i >= 0; i--) if ((TimeNow() - dbgShips[i].time).TotalSeconds > 5) dbgShips.RemoveAt(i);
+    if (++dbgTick % 3 != 0) return; // redraw ~2x a second (the drawings stay until removed)
 
     dbg.RemoveDraw();
+    // recorded paths (ships sharing a path: drawn once)
+    for (int i = 0; i < dbgShips.Count; i++)
+    {
+        String ps = dbgShips[i].path;
+        bool seen = ps == "";
+        for (int k = 0; k < i && !seen; k++) seen = dbgShips[k].path == ps;
+        if (seen) continue;
+        String[] pts = ps.Split(':');
+        for (int k = 1; k < pts.Length; k++) dbg.Line(StringToVector(pts[k - 1]), StringToVector(pts[k]), Color.SkyBlue, 0.1f);
+        dbg.Label("Path start", StringToVector(pts[0]), Color.SkyBlue);
+        dbg.Label("Path end", StringToVector(pts[pts.Length - 1]), Color.SkyBlue);
+    }
     // ships
     for (int i = 0; i < tcShips.Count; i++)
     {
@@ -138,13 +154,27 @@ void UpdateDebugDraw()
         if (job == null) continue;
         int doneCount = 0;
         for (int c = 0; c < job.done.Length; c++) if (job.done[c] == '1') doneCount++;
-        if (i == 0 || dbgShips[i - 1].jobPos != d.jobPos) dbg.Label("Job: " + doneCount + "/" + job.done.Length + " holes done", d.jobPos, Color.White);
+        bool firstOfJob = i == 0 || dbgShips[i - 1].jobPos != d.jobPos;
+        if (firstOfJob)
+        {
+            dbg.Label("Job: " + doneCount + "/" + job.done.Length + " holes done", d.jobPos, Color.White);
+            // waiting ring (as the ships compute it, for this ship's size): 6 spots
+            for (int k = 0; k < 6; k++)
+            {
+                double a = k * Math.PI / 3;
+                dbg.Point(d.jobPos - d.fwd * t.dia * 2.5f + (d.left * (float)Math.Cos(a) + d.down * (float)Math.Sin(a)) * t.dia * 1.2f, Color.Violet, t.dia * 0.15f);
+            }
+            dbg.Label("Waiting ring", d.jobPos - d.fwd * t.dia * 2.5f, Color.Violet);
+        }
         for (int c = 0; c < job.done.Length; c++)
         {
             int col = c % job.w, row = c / job.w;
             Vector3 p = d.jobPos + d.left * ((job.w - 1f) / 2f - col) * job.tw - d.down * ((job.h - 1f) / 2f - row) * job.th;
             JobShip owner = HoleOwner(job, c, null);
-            dbg.Point(p, job.done[c] == '1' ? Color.Gray : owner != null ? Color.Orange : Color.White, Math.Min(job.tw, job.th) * 0.2f);
+            Color hc = job.done[c] == '1' ? Color.Gray : owner != null ? Color.Orange : Color.White;
+            dbg.Point(p, hc, Math.Min(job.tw, job.th) * 0.2f);
+            // where ships line up over the hole (one ship size above the surface) and come straight down
+            if (firstOfJob) dbg.Line(p, p - d.fwd * t.dia, hc, 0.05f);
             if (owner == null || owner.id != d.id) continue;
             dbg.Line(t.pos, p, Color.Orange, 0.05f);
             dbg.Label("Hole " + (job.order.IndexOf(c) + 1) + ": " + TCName(t), p, Color.Orange);
@@ -202,6 +232,8 @@ String GetDebugDrawLegend()
         "Red line: collision course (label: who gives way)\n" +
         "Blue: flight target; thin green/red: camera rays (clear/hit)\n" +
         "Points: grey hole done, orange claimed, white free\n" +
+        "Line up from a hole: where ships line up over it and come down\n" +
+        "Violet: waiting ring; sky blue: recorded path\n" +
         "Cyan box: docking area, purple: lane cameras\n" +
         "Thick green: ship cleared to its connector\n";
 }
