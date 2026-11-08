@@ -503,10 +503,14 @@ void UpdateNavigation()
             laneTurn = !toLane;
             if (toLane) { SetFlightTarget(laneEntry, 0); AlignToGravity(dock.downDir, 90, true); }
             else { SetFlightTarget(shipPosition, 0); AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false); }
+            stuckCounter = 0;
         }
+        // already at (or docked to) the connector: dock, whatever else is going on (e.g. job started while docked)
+        if (FindConnector(MyShipConnectorStatus.Connectable) != null || FindConnector(MyShipConnectorStatus.Connected) != null)
+        { SetNavState(NavState.Docking); return; }
         if (toLane && distToTarget < wpReachedDist && distToTarget != -1)
         {
-            toLane = false; laneTurn = true;
+            toLane = false; laneTurn = true; stuckCounter = 0;
             SetFlightTarget(laneEntry, 0);
             AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false);
             return;
@@ -514,7 +518,7 @@ void UpdateNavigation()
         if (laneTurn)
         {
             statusMessage = "Docking: turning at the lane";
-            if (!isAligned) return;
+            if (!isAligned && ++stuckCounter < 48) return; // at most 8 s (weak gyros, heavy cargo): then on anyway
             laneTurn = false;
             GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos);
             SetFlightTarget(navTargetPos, 0);
@@ -525,8 +529,6 @@ void UpdateNavigation()
             SetFlightTarget(navTargetPos, 10);
             AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false);
         }
-        if (FindConnector(MyShipConnectorStatus.Connectable) != null || FindConnector(MyShipConnectorStatus.Connected) != null)
-        { SetNavState(NavState.Docking); return; }
         // reached the point beside the obstacle: from here straight to the connector again
         if (detourShift.LengthSquared() > 0 && distToTarget < wpReachedDist && distToTarget != -1) { detourShift = new Vector3(); return; }
         if (distToTarget < wpReachedDist / 2 && distToTarget != -1)

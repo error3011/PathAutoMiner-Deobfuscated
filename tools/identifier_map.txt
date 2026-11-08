@@ -428,7 +428,7 @@ StationHandlesMe -> Ακ
 StatusMsg -> Ȥ
 StatusOverview -> ΕΝ
 Stop -> ΛЈ
-StopAll -> Њ
+StopAll -> Ћ
 StopFlight -> ΒЈ
 StopGyroOverride -> ΕΞ
 StopPathRecording -> ΘΫ
@@ -618,7 +618,7 @@ checkReceived -> Μγ
 circlePos -> Μδ
 cl -> Θω
 claimed -> Αψ
-clear -> Ј
+clear -> Љ
 clearScans -> Ερ
 cleared -> ΓΙ
 clearedConn -> Ʊ
@@ -629,7 +629,7 @@ closePam -> Με
 closest -> з
 closestDist -> Ȩ
 closestIdx -> ī
-cmd -> Ћ
+cmd -> Ќ
 cmdSent -> Ʋ
 cmdShips -> Ĭ
 cmdTarget -> Θϋ
@@ -884,7 +884,7 @@ highestMax -> ΙΧ
 hit -> є
 hole -> ı
 holeCells -> Ę
-holeCol -> Љ
+holeCol -> Њ
 holeNumber -> ΑА
 holeOrderKey -> ΙΨ
 holeRow -> Ѕ
@@ -1007,7 +1007,7 @@ lineCount -> ΜЎ
 lineIdx -> Ιμ
 lines -> Π
 linesPerPage -> ΒΕ
-list -> Ќ
+list -> Ѝ
 lo -> ΒΖ
 loadPercent -> Γτ
 loadText -> Ιν
@@ -1096,7 +1096,7 @@ multiplier -> Ζι
 myDest -> Ζκ
 myDist -> ΝΖ
 myGridId -> ї
-myHole -> Ѝ
+myHole -> Ў
 myPhase -> Ιω
 myPrio -> ΒΛ
 name -> δ
@@ -1319,7 +1319,7 @@ stockpile -> Νκ
 stoneCount -> ΔΗ
 stopAtState -> ΒΩ
 strict -> ΖЋ
-stuckCounter -> Ў
+stuckCounter -> Ј
 stuckSensitivity -> ј
 subText -> С
 subtypeName -> ΚΘ
