@@ -5197,6 +5197,7 @@ void UpdateControllerDisplays()
         String param = "";
         IMyTextPanel p = lcdPanels[i];
         ParseLCDMode(p, out mode, out param);
+        lcdFontSet = ApplyLcdFont(p);
         if (SpriteMode(mode)) { if (draw) DrawSpriteScreen(p, mode, param); continue; }
         int lines = LinesFor(p);
         DrawTextScreen(p, BuildControllerScreenForMode(mode, param, i == 0, lines), mode, lines); // coloured lines
@@ -5346,8 +5347,22 @@ String GetLCDModeHelp(bool withDefault)
     text += "//Available modes:\n" + "//main:<Page>\n" + "//mainX:<Page>  (no empty lines)\n" + "//menu\n" +
         "//inventory\n" + "//menu:<shipname>\n" + "//inventory:<shipname>";
     // (the check for outdated Custom Data looks for the text above: new modes only in the template)
-    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)\n//docks";
+    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)\n//docks" +
+        "\n\n//Font and size of this screen (remove the // to use):\n//font=Debug   (or Monospace, White, ...)\n//size=1.0";
     return text;
+}
+
+// per LCD (its Custom Data): font=<name> and size=<number>, set on the LCD; all screens draw with them
+bool lcdFontSet = false;
+bool ApplyLcdFont(IMyTextPanel p)
+{
+    String[] lines = p.CustomData.Split('\n');
+    bool ok = true;
+    String f = ParseCustomDataValue(FindCustomDataLine(lines, "font=", ref ok)), s = ParseCustomDataValue(FindCustomDataLine(lines, "size=", ref ok));
+    float v;
+    if (float.TryParse(s, out v) && v > 0.05f && Math.Abs(v - p.FontSize) > 0.001f) p.FontSize = v;
+    if (f != "" && f != p.Font) p.Font = f;
+    return f != "";
 }
 
 LCDMode ModeOf(IMyTerminalBlock panel) { LCDMode m; String s; ParseLCDMode(panel, out m, out s); return m; }
@@ -8127,7 +8142,7 @@ Color LineColor(String l, LCDMode mode, Color def)
 // highlighted; redrawn only when something changed
 void DrawTextScreen(IMyTextSurface p, String text, LCDMode mode, int lines)
 {
-    String font = mode == LCDMode.Fleet ? "Monospace" : p.Font; // table columns
+    String font = mode == LCDMode.Fleet && !lcdFontSet ? "Monospace" : p.Font; // table columns (unless font= is set)
     String key = text + p.FontSize + font + p.FontColor + p.BackgroundColor + p.TextPadding, old;
     if (screenCache.TryGetValue(p, out old) && old == key && p.ContentType == ContentType.SCRIPT) return;
     screenCache[p] = key;
@@ -8166,27 +8181,28 @@ void DrawLog(IMyTextPanel p, Vector2 at, Vector2 size)
 {
     float sc = Math.Max(0.3f, p.FontSize), pad = 6, bottom = at.Y + size.Y;
     StringBuilder sb = new StringBuilder();
-    Func<String, float> W = s => p.MeasureStringInPixels(sb.Clear().Append(s), "Debug", sc).X;
-    float lh = p.MeasureStringInPixels(sb.Clear().Append("Ag"), "Debug", sc).Y, y = at.Y + pad;
-    DText("Coordination log (newest first)", new Vector2(at.X + pad, y), Color.White, sc, TextAlignment.LEFT);
+    String fn = p.Font;
+    Func<String, float> W = s => p.MeasureStringInPixels(sb.Clear().Append(s), fn, sc).X;
+    float lh = p.MeasureStringInPixels(sb.Clear().Append("Ag"), fn, sc).Y, y = at.Y + pad;
+    DText("Coordination log (newest first)", new Vector2(at.X + pad, y), Color.White, sc, TextAlignment.LEFT, fn);
     y += lh * 1.3f;
-    if (logLines.Count == 0) DText("(nothing yet)", new Vector2(at.X + pad, y), Color.Gray, sc, TextAlignment.LEFT);
+    if (logLines.Count == 0) DText("(nothing yet)", new Vector2(at.X + pad, y), Color.Gray, sc, TextAlignment.LEFT, fn);
     for (int i = 0; i < logLines.Count && y + lh <= bottom; i++)
     {
         String time = logLines[i].Substring(0, 9), msg = logLines[i].Substring(9), line = "";
         Color c = LogColor(msg);
-        DText(time, new Vector2(at.X + pad, y), Color.Gray, sc, TextAlignment.LEFT);
+        DText(time, new Vector2(at.X + pad, y), Color.Gray, sc, TextAlignment.LEFT, fn);
         float x = at.X + pad + W(time), width = at.X + size.X - pad - x;
         foreach (String w in msg.Split(' '))
         {
             String t = line == "" ? w : line + " " + w;
             if (line == "" || W(t) <= width) { line = t; continue; }
-            DText(line, new Vector2(x, y), c, sc, TextAlignment.LEFT);
+            DText(line, new Vector2(x, y), c, sc, TextAlignment.LEFT, fn);
             y += lh;
             line = w;
             if (y + lh > bottom) { line = ""; break; }
         }
-        if (line != "") DText(line, new Vector2(x, y), c, sc, TextAlignment.LEFT);
+        if (line != "") DText(line, new Vector2(x, y), c, sc, TextAlignment.LEFT, fn);
         y += lh;
     }
 }
@@ -8204,9 +8220,12 @@ void DLine(Vector2 a, Vector2 b, Color c, float w)
 
 void DBox(Vector2 center, Vector2 size, Color c, String shape) { drawFrame.Add(new MySprite(SpriteType.TEXTURE, shape, center, size, c)); }
 
-void DText(String s, Vector2 at, Color c, float scale, TextAlignment align, String font = "Debug")
+// text sprite; without a font given (map, job): the LCD's font, sizes scaled by its font size
+float drawScale = 1;
+String drawFont = "Debug";
+void DText(String s, Vector2 at, Color c, float scale, TextAlignment align, String font = null)
 {
-    MySprite t = MySprite.CreateText(s, font, c, scale, align);
+    MySprite t = MySprite.CreateText(s, font ?? drawFont, c, font == null ? scale * drawScale : scale, align);
     t.Position = at;
     drawFrame.Add(t);
 }
@@ -8216,6 +8235,7 @@ void DrawSpriteScreen(IMyTextPanel p, LCDMode mode, String param)
     if (p.ContentType != ContentType.SCRIPT) { p.ContentType = ContentType.SCRIPT; p.Script = ""; }
     p.ScriptBackgroundColor = new Color(0, 0, 0);
     Vector2 size = p.SurfaceSize, at = (p.TextureSize - size) / 2;
+    drawScale = p.FontSize; drawFont = p.Font;
     drawFrame = p.DrawFrame();
     if (mode == LCDMode.Job) DrawJobMatrix(param, at, size);
     else if (mode == LCDMode.Log) DrawLog(p, at, size);

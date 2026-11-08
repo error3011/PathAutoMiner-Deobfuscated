@@ -264,6 +264,7 @@ void UpdateControllerDisplays()
         String param = "";
         IMyTextPanel p = lcdPanels[i];
         ParseLCDMode(p, out mode, out param);
+        lcdFontSet = ApplyLcdFont(p);
         if (SpriteMode(mode)) { if (draw) DrawSpriteScreen(p, mode, param); continue; }
         int lines = LinesFor(p);
         DrawTextScreen(p, BuildControllerScreenForMode(mode, param, i == 0, lines), mode, lines); // coloured lines
@@ -413,8 +414,22 @@ String GetLCDModeHelp(bool withDefault)
     text += "//Available modes:\n" + "//main:<Page>\n" + "//mainX:<Page>  (no empty lines)\n" + "//menu\n" +
         "//inventory\n" + "//menu:<shipname>\n" + "//inventory:<shipname>";
     // (the check for outdated Custom Data looks for the text above: new modes only in the template)
-    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)\n//docks";
+    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)\n//docks" +
+        "\n\n//Font and size of this screen (remove the // to use):\n//font=Debug   (or Monospace, White, ...)\n//size=1.0";
     return text;
+}
+
+// per LCD (its Custom Data): font=<name> and size=<number>, set on the LCD; all screens draw with them
+bool lcdFontSet = false;
+bool ApplyLcdFont(IMyTextPanel p)
+{
+    String[] lines = p.CustomData.Split('\n');
+    bool ok = true;
+    String f = ParseCustomDataValue(FindCustomDataLine(lines, "font=", ref ok)), s = ParseCustomDataValue(FindCustomDataLine(lines, "size=", ref ok));
+    float v;
+    if (float.TryParse(s, out v) && v > 0.05f && Math.Abs(v - p.FontSize) > 0.001f) p.FontSize = v;
+    if (f != "" && f != p.Font) p.Font = f;
+    return f != "";
 }
 
 LCDMode ModeOf(IMyTerminalBlock panel) { LCDMode m; String s; ParseLCDMode(panel, out m, out s); return m; }
