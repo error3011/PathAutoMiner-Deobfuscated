@@ -25,6 +25,7 @@ class TCShip
     public int hole = -1, flag, bat = -1, h2, ur, nav = -1; // claimed hole, 1 queued / 2 parked, energy, flight state (screens)
     public bool emg;
     public Vector3 up;
+    public float ms = -1; // its script's average run time
 }
 
 class TCPair
@@ -69,6 +70,7 @@ void HandleTrafficControl(String data)
         String[] e = f[12].Split(',');
         s.bat = int.Parse(e[0]); s.h2 = int.Parse(e[1]); s.ur = int.Parse(e[2]); s.emg = e[3] == "1";
         s.nav = e.Length >= 6 ? int.Parse(e[4]) : -1; s.up = StringToVector(e[e.Length - 1]) / 10;
+        s.ms = e.Length >= 7 ? float.Parse(e[5]) : -1;
     }
     if (isNew) AddLog("Contact: " + TCName(s));
 }

@@ -1,7 +1,15 @@
 // ========================== MAIN ==========================
 
+// run time of the script (Runtime.LastRunTimeMs = the previous run): average, and the highest run
+// in the last 10 s
+double execAvg = 0, execPeak = 0;
+DateTime execPeakTime = DateTime.MinValue;
+
 void Main(string argument, UpdateType updateSource)
 {
+    double ms = Runtime.LastRunTimeMs;
+    execAvg = execAvg * 0.95 + ms * 0.05;
+    if (ms > execPeak || (TimeNow() - execPeakTime).TotalSeconds > 10) { execPeak = ms; execPeakTime = TimeNow(); }
     try
     {
         if (lastError != null)

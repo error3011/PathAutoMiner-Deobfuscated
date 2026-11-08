@@ -268,7 +268,7 @@ void UpdateControllerDisplays()
         int lines = LinesFor(p);
         DrawTextScreen(p, BuildControllerScreenForMode(mode, param, i == 0, lines), mode, lines); // coloured lines
     }
-    Echo(echoText + GetDebugDrawLegend());
+    Echo(echoText + ExecLine() + GetDebugDrawLegend());
     for (int i = 0; i < debugPanels.Count; i++)
     {
         IMyTextPanel panel = debugPanels[i];
@@ -292,7 +292,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
     String thinSeparator = "--------------------------------------------\n";
 
     if (selectedShip == null || currentMenu == MenuPage.Main || currentMenu == MenuPage.SendCommandAll)
-        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
+        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships | " + Math.Round(execAvg, 2) + " ms" + "\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
     else text += GetShipStatusLine(selectedShip) + "\n";
     text += separator;
     int headerLines = text.Split('\n').Length - 1; // title, docking area, jobs, traffic, separator: the list gets the rest

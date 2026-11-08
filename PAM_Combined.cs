@@ -630,8 +630,16 @@ Program()
 // ========================== 06_Main.cs ==========================
 // ========================== MAIN ==========================
 
+// run time of the script (Runtime.LastRunTimeMs = the previous run): average, and the highest run
+// in the last 10 s
+double execAvg = 0, execPeak = 0;
+DateTime execPeakTime = DateTime.MinValue;
+
 void Main(string argument, UpdateType updateSource)
 {
+    double ms = Runtime.LastRunTimeMs;
+    execAvg = execAvg * 0.95 + ms * 0.05;
+    if (ms > execPeak || (TimeNow() - execPeakTime).TotalSeconds > 10) { execPeak = ms; execPeakTime = TimeNow(); }
     try
     {
         if (lastError != null)
@@ -1357,7 +1365,7 @@ String BuildMenuScreen(bool applyAction)
         text += "Next scan: " + scanCountdown + "s\n";
         text += "Drill area: " + Math.Round(toolWidth, 1) + "x" + Math.Round(toolHeight, 1) + "m Ship: " + Math.Round(shipFootWidth, 1) + "x" + Math.Round(shipFootHeight, 1) + "m (" + Math.Round(shipDiameter, 1) + "m)\n" + (cameras.Count > 0 ? "Cameras: " + cameraCoverage + "\n" : "");
         text += "Broadcast: " + (broadcastEnabled ? "Online - " + shipName : "Offline") + "\n";
-        text += "Max Instructions: " + Math.Round(maxInstructionPercent * 100f, 1) + "% \n";
+        text += "Max Instructions: " + Math.Round(maxInstructionPercent * 100f, 1) + "% | " + Math.Round(execAvg, 2) + " ms\n";
     }
 
     if (setupErrorLevel == 2) text = "Fatal setup error\nNext scan: " + scanCountdown + "s\n";
@@ -5193,7 +5201,7 @@ void UpdateControllerDisplays()
         int lines = LinesFor(p);
         DrawTextScreen(p, BuildControllerScreenForMode(mode, param, i == 0, lines), mode, lines); // coloured lines
     }
-    Echo(echoText + GetDebugDrawLegend());
+    Echo(echoText + ExecLine() + GetDebugDrawLegend());
     for (int i = 0; i < debugPanels.Count; i++)
     {
         IMyTextPanel panel = debugPanels[i];
@@ -5217,7 +5225,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
     String thinSeparator = "--------------------------------------------\n";
 
     if (selectedShip == null || currentMenu == MenuPage.Main || currentMenu == MenuPage.SendCommandAll)
-        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships" + "\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
+        text += "[PAM]-Controller | " + connectedShips.Count + " Connected ships | " + Math.Round(execAvg, 2) + " ms" + "\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
     else text += GetShipStatusLine(selectedShip) + "\n";
     text += separator;
     int headerLines = text.Split('\n').Length - 1; // title, docking area, jobs, traffic, separator: the list gets the rest
@@ -5855,8 +5863,8 @@ void UpdateTraffic()
         VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
         ";" + (outOfService || emgStage == 1 || emgStage == 2 ? 2 : dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + (sentPrio = TrafficPrio()) + "," + (sentDest = (float)Math.Round(DestDist())) + ";" + Me.GetId() +
-        // for the controller's screens: battery %, hydrogen %, uranium kg, emergency, flight state, up (x10)
-        ";" + (batteryState == BatteryState.None ? -1 : (int)batteryPercent) + "," + (int)hydrogenPercent + "," + (int)uraniumAmount + "," + (emergency ? 1 : 0) + "," + (int)currentNavState + "," +
+        // for the controller's screens: battery %, hydrogen %, uranium kg, emergency, flight state, run time ms, up (x10)
+        ";" + (batteryState == BatteryState.None ? -1 : (int)batteryPercent) + "," + (int)hydrogenPercent + "," + (int)uraniumAmount + "," + (emergency ? 1 : 0) + "," + (int)currentNavState + "," + Math.Round(execAvg, 3) + "," +
         (int)(-g.X * 10) + "|" + (int)(-g.Y * 10) + "|" + (int)(-g.Z * 10) +
         ";" + (TimeNow() < reopenSend ? reopenCell : -1)); // hole reopened with PREV (co-op)
 }
@@ -7320,6 +7328,7 @@ class TCShip
     public int hole = -1, flag, bat = -1, h2, ur, nav = -1; // claimed hole, 1 queued / 2 parked, energy, flight state (screens)
     public bool emg;
     public Vector3 up;
+    public float ms = -1; // its script's average run time
 }
 
 class TCPair
@@ -7364,6 +7373,7 @@ void HandleTrafficControl(String data)
         String[] e = f[12].Split(',');
         s.bat = int.Parse(e[0]); s.h2 = int.Parse(e[1]); s.ur = int.Parse(e[2]); s.emg = e[3] == "1";
         s.nav = e.Length >= 6 ? int.Parse(e[4]) : -1; s.up = StringToVector(e[e.Length - 1]) / 10;
+        s.ms = e.Length >= 7 ? float.Parse(e[5]) : -1;
     }
     if (isNew) AddLog("Contact: " + TCName(s));
 }
@@ -7998,12 +8008,15 @@ String ShipFlags(TCShip t)
     return f.Trim();
 }
 
+// this PB's run time (server performance)
+String ExecLine() { return "Run time: avg " + Math.Round(execAvg, 3) + " ms, max " + Math.Round(execPeak, 2) + " ms (10 s)\n"; }
+
 String BuildFleetScreen()
 {
-    String text = "PAM fleet | " + connectedShips.Count + " ships\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
+    String text = "PAM fleet | " + connectedShips.Count + " ships | controller " + Math.Round(execAvg, 2) + " ms (max " + Math.Round(execPeak, 2) + ")\n" + GetDockAreaLine() + GetJobLines() + GetTrafficControlLine();
     int nw = 6; // name column: as wide as the longest name (max 20 characters)
     for (int i = 0; i < connectedShips.Count; i++) nw = Math.Min(21, Math.Max(nw, connectedShips[i].name.Length + 1));
-    text += Pad("Ship", nw) + Pad("State", 15) + " Crg  Bat  H2  Hole Flags\n";
+    text += Pad("Ship", nw) + Pad("State", 15) + " Crg  Bat  H2  Hole   ms  Flags\n";
     for (int i = 0; i < connectedShips.Count; i++)
     {
         ShipInfo s = connectedShips[i];
@@ -8015,7 +8028,7 @@ String BuildFleetScreen()
             hole = ("" + (job != null ? job.order.IndexOf(t.hole) + 1 : t.hole + 1)).PadLeft(3);
         }
         text += Pad(s.name, nw - 1) + " " + Pad(s.IsTimedOut() ? "NO CONTACT" : ShortState(t != null && t.nav >= 0 ? GetNavStateName((NavState)t.nav) : s.stateText), 14) + " " +
-            Pct((int)(SafeDiv(s.currentVolume, s.maxVolume) * 100)) + " " + Pct(t != null ? t.bat : -1) + " " + Pct(t != null ? t.h2 : -1) + " " + hole + "  " + ShipFlags(t) + "\n";
+            Pct((int)(SafeDiv(s.currentVolume, s.maxVolume) * 100)) + " " + Pct(t != null ? t.bat : -1) + " " + Pct(t != null ? t.h2 : -1) + " " + hole + " " + (t != null && t.ms >= 0 ? t.ms.ToString("0.00") : "   -").PadLeft(5) + "  " + ShipFlags(t) + "\n";
     }
     return text;
 }
@@ -8031,7 +8044,7 @@ String BuildShipScreen(String name)
     if (t == null) return text + "(no traffic data: traffic off or out of range)\n";
     if (t.nav >= 0) text += "Doing:  " + GetNavStateName((NavState)t.nav) + "\n";
     text += "Battery " + Pct(t.bat).Trim() + "  H2 " + Pct(t.h2).Trim() + "  U " + t.ur + " kg\n";
-    text += "Speed " + Math.Round(t.vel.Length(), 1) + " m/s\n";
+    text += "Speed " + Math.Round(t.vel.Length(), 1) + " m/s" + (t.ms >= 0 ? "  Script " + t.ms.ToString("0.00") + " ms" : "") + "\n";
     JobRec job = jobs.Find(q => q.key == t.job);
     if (job != null)
     {

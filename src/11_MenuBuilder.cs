@@ -222,7 +222,7 @@ String BuildMenuScreen(bool applyAction)
         text += "Next scan: " + scanCountdown + "s\n";
         text += "Drill area: " + Math.Round(toolWidth, 1) + "x" + Math.Round(toolHeight, 1) + "m Ship: " + Math.Round(shipFootWidth, 1) + "x" + Math.Round(shipFootHeight, 1) + "m (" + Math.Round(shipDiameter, 1) + "m)\n" + (cameras.Count > 0 ? "Cameras: " + cameraCoverage + "\n" : "");
         text += "Broadcast: " + (broadcastEnabled ? "Online - " + shipName : "Offline") + "\n";
-        text += "Max Instructions: " + Math.Round(maxInstructionPercent * 100f, 1) + "% \n";
+        text += "Max Instructions: " + Math.Round(maxInstructionPercent * 100f, 1) + "% | " + Math.Round(execAvg, 2) + " ms\n";
     }
 
     if (setupErrorLevel == 2) text = "Fatal setup error\nNext scan: " + scanCountdown + "s\n";
