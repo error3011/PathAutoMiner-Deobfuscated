@@ -50,6 +50,15 @@ SpiralResult GetNextHolePosition(int holeNumber, bool reset)
 }
 
 
+// Docking at a pool connector: the recorded path ends at the home connector, among the docked ships.
+// Leave it before the waypoint that gets closer to home than the pool connector is (plus one ship
+// size), and fly to that connector's lane from there.
+bool PoolPathEnd(int idx)
+{
+    return poolDock != null && idx >= 0 && idx < waypoints.Count &&
+        Vector3.Distance(waypoints[idx].position, homeDock.position) < Vector3.Distance(poolDock.position, homeDock.position) + shipDiameter;
+}
+
 // ========================== NAVIGATION STATE MACHINE ==========================
 // (UpdateNavigation is the core state machine - extremely large)
 // See the original logic flow for all NavState transitions.
@@ -113,7 +122,7 @@ void UpdateNavigation()
             if (result == SpiralResult.Found)
             {
                 stuckCounter = 1;
-                SetBlocksEnabled(workTools, true);
+                SetBlocksEnabled(workTools, false); // off on the way to the hole: on when it starts the hole (Mining)
                 miningTargetPos = GetJobGridPosition(holeCol, holeRow, true);
                 // over other holes (not the next one; also when arriving from the path or the waiting
                 // spot): first over the hole, at least one ship size above the job surface, then straight
@@ -135,7 +144,7 @@ void UpdateNavigation()
                 return;
             }
             // no progress for 5 s (not held by traffic or the cameras): over the hole, the ground is in
-            // the way down (terrain above the job surface) -> start the hole here (drills are on);
+            // the way down (terrain above the job surface) -> start the hole here (Mining turns the drills on);
             // elsewhere a hill is in the way -> go over it, one ship size higher, then down
             if (shipSpeed < 0.3f && trafficSpeedLimit < 0 && !pathBlocked)
             {
@@ -435,7 +444,9 @@ void UpdateNavigation()
             }
         }
 
-        if (useDockDir)
+        if (useDockDir && currentNavState == NavState.FlyToDockArea)
+            AlignToGravity(pathFollowData.target.downDir, 90, true); // facing the way it flies: it turns round at the connector's lane
+        else if (useDockDir)
             AlignToDown(pathFollowData.target.downDir, pathFollowData.target.forwardDir, pathFollowData.target.leftDir, false);
         else if (offPath)
             AlignToGravity(pathFollowData.target.downDir, 10, true);
@@ -447,6 +458,7 @@ void UpdateNavigation()
 
         SetFlightTargetFull(true, false, true, navTargetPos, pathSegmentDir, currentPathWaypoint == null ? 0 : currentPathWaypoint.maxSpeed, approachSpeed);
 
+        if (currentNavState == NavState.FlyToDockArea && PoolPathEnd(pathWaypointIndex)) reachedEnd = true;
         if (reachedEnd)
         {
             waypointsRemaining = 0;
@@ -485,18 +497,30 @@ void UpdateNavigation()
             if (!GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos) || !GetDockApproachPosition(dock, (dockDist + 1) * shipDiameter, true, out laneEntry))
             { ShowStatusMessage(StatusMsg.ConnectorNotReady); StopAll(); return; }
             // straight lane in front of the connector: off its line -> first to the lane entry, then straight in (no diagonal past docked ships)
+            // facing the way it flies to the lane entry; turns round there (already on the lane: where it
+            // is), then backs straight in
             toLane = OffLane(navTargetPos);
-            SetFlightTarget(toLane ? laneEntry : navTargetPos, 0);
-            AlignToGravity(dock.downDir, 90, true);
+            laneTurn = !toLane;
+            if (toLane) { SetFlightTarget(laneEntry, 0); AlignToGravity(dock.downDir, 90, true); }
+            else { SetFlightTarget(shipPosition, 0); AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false); }
         }
         if (toLane && distToTarget < wpReachedDist && distToTarget != -1)
         {
-            toLane = false;
+            toLane = false; laneTurn = true;
+            SetFlightTarget(laneEntry, 0);
+            AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false);
+            return;
+        }
+        if (laneTurn)
+        {
+            statusMessage = "Docking: turning at the lane";
+            if (!isAligned) return;
+            laneTurn = false;
             GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos);
             SetFlightTarget(navTargetPos, 0);
             return;
         }
-        if (distToTarget < followPathDock * shipDiameter && distToTarget != -1)
+        if (!toLane && distToTarget < followPathDock * shipDiameter && distToTarget != -1)
         {
             SetFlightTarget(navTargetPos, 10);
             AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false);

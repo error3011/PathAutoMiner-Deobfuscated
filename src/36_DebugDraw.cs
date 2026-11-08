@@ -7,7 +7,7 @@
 //  - with debugDraw on the ships too: blue line to each ship's flight target, its camera rays
 //    (green clear, red hit), and the hole grid of each job (grey done, orange claimed with a line
 //    from the ship to its hole, white free)
-//  - docking area: [PAM-Zone] spheres, [PAM-Lane] camera rays, green line from the ship cleared
+//  - docking area: [PAM-Zone] sensor boxes, [PAM-Lane] camera rays, green line from the ship cleared
 //    to dock to its connector
 // Text labels (HUD markers) name the ships with their state, the conflicts (who gives way), the
 // claimed holes, the docking area and the cleared ship. The colour key is in the PB's output.
@@ -154,7 +154,14 @@ void UpdateDebugDraw()
     for (int i = 0; i < zoneSensors.Count; i++)
     {
         IMySensorBlock z = zoneSensors[i];
-        dbg.Sphere(z.GetPosition(), new Vector3D(Math.Max(z.LeftExtend, z.RightExtend), Math.Max(z.TopExtend, z.BottomExtend), Math.Max(z.FrontExtend, z.BackExtend)).Length(), Color.Cyan);
+        // the sensor box: 12 edges
+        MatrixD m = z.WorldMatrix;
+        Vector3D[] c = new Vector3D[8];
+        for (int k = 0; k < 8; k++)
+            c[k] = z.GetPosition() + m.Right * ((k & 1) == 0 ? -z.LeftExtend : z.RightExtend) + m.Up * ((k & 2) == 0 ? -z.BottomExtend : z.TopExtend) + m.Forward * ((k & 4) == 0 ? -z.BackExtend : z.FrontExtend);
+        for (int k = 0; k < 8; k++)
+            for (int b = 1; b < 8; b <<= 1)
+                if ((k & b) == 0) dbg.Line(c[k], c[k | b], Color.Cyan, 0.1f);
         dbg.Label("Docking area" + (dockAreaStatus != "" ? ": " + dockAreaStatus : ""), z.GetPosition(), Color.Cyan);
     }
     for (int i = 0; i < laneCameras.Count; i++)
@@ -195,6 +202,6 @@ String GetDebugDrawLegend()
         "Red line: collision course (label: who gives way)\n" +
         "Blue: flight target; thin green/red: camera rays (clear/hit)\n" +
         "Points: grey hole done, orange claimed, white free\n" +
-        "Cyan sphere: docking area, purple: lane cameras\n" +
+        "Cyan box: docking area, purple: lane cameras\n" +
         "Thick green: ship cleared to its connector\n";
 }

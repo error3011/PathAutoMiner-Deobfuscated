@@ -13,8 +13,8 @@ int stationClearedKind = 0;
 long stationConn = 0;
 bool waitUndockClearance = false;
 int dockRequestTick = 0;
-List<Vector3> zoneCenters = new List<Vector3>(); // the station's [PAM-Zone] sensor areas (bounding spheres)
-List<float> zoneRadii = new List<float>();
+List<Vector3> zoneCenters = new List<Vector3>(); // the station's [PAM-Zone] sensor areas: boxes, as the sensor sees
+List<Vector3> zoneBox = new List<Vector3>();      // 4 per area: forward, up, extents left/bottom/back, right/top/front
 bool dockQueued = false;  // holding outside the docking area for clearance (sent in traffic messages)
 bool outOfService = false; // can't dock (connector damaged): parked beside the path, others pass it
 bool dockHoldSet = false;
@@ -94,15 +94,17 @@ void ParseStation(String data)
         String[] c = cl[i].Split(':');
         if (c.Length == 3 && c[0] == myGridId.ToString()) { stationCleared = myGridId; stationClearedKind = int.Parse(c[1]); stationConn = long.Parse(c[2]); }
     }
-    zoneCenters.Clear(); zoneRadii.Clear();
+    zoneCenters.Clear(); zoneBox.Clear();
     if (f.Length >= 8 && f[7] != "")
     {
         String[] z = f[7].Split(':');
         for (int i = 0; i < z.Length; i++)
         {
+            // pos,forward,up,left,right,top,bottom,front,back (older controller: pos,radius -> a box around that sphere)
             String[] e = z[i].Split(',');
-            if (e.Length < 2) continue;
-            zoneCenters.Add(StringToVector(e[0])); zoneRadii.Add(float.Parse(e[1]));
+            if (e.Length >= 9) AddZone(StringToVector(e[0]), StringToVector(e[1]), StringToVector(e[2]),
+                new Vector3(float.Parse(e[3]), float.Parse(e[6]), float.Parse(e[8])), new Vector3(float.Parse(e[4]), float.Parse(e[5]), float.Parse(e[7])));
+            else if (e.Length >= 2) { float r = float.Parse(e[1]); AddZone(StringToVector(e[0]), Vector3.Forward, Vector3.Up, new Vector3(r), new Vector3(r)); }
         }
     }
     // the station's own list of pool connectors: lets ships use the pool before docking there once
@@ -145,9 +147,18 @@ bool ApplyStationDock()
     return true;
 }
 
+void AddZone(Vector3 pos, Vector3 fwd, Vector3 up, Vector3 lo, Vector3 hi) { zoneCenters.Add(pos); zoneBox.Add(fwd); zoneBox.Add(up); zoneBox.Add(lo); zoneBox.Add(hi); }
+
+// inside a docking area's sensor box, or closer to it than about half the ship's size
 bool InDockZone(Vector3 p)
 {
-    for (int i = 0; i < zoneCenters.Count; i++) if (Vector3.Distance(p, zoneCenters[i]) < zoneRadii[i] + shipDiameter * 0.75f) return true;
+    float m = shipDiameter * 0.6f;
+    for (int i = 0; i < zoneCenters.Count; i++)
+    {
+        Vector3 d = p - zoneCenters[i], f = zoneBox[i * 4], u = zoneBox[i * 4 + 1], lo = zoneBox[i * 4 + 2], hi = zoneBox[i * 4 + 3];
+        float x = Vector3.Dot(d, Vector3.Cross(f, u)), y = Vector3.Dot(d, u), z = Vector3.Dot(d, f);
+        if (x > -lo.X - m && x < hi.X + m && y > -lo.Y - m && y < hi.Y + m && z > -lo.Z - m && z < hi.Z + m) return true;
+    }
     return false;
 }
 

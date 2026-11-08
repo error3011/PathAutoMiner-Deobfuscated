@@ -14,7 +14,7 @@
 // the other; if none works it stays where it is ("Docking blocked").
 // Active only for free flight: path flights and hole-to-hole moves. Off while mining, backing
 // out of a hole and docking, where the ship is meant to be close to voxels and blocks. Terrain
-// (planet/asteroid) doesn't count between holes (the drills are on and the hole tops sit on the
+// (planet/asteroid) doesn't count between holes (the hole tops sit on the
 // ground) or right at the flight target (recorded spots close to the ground).
 
 List<IMyCameraBlock> cameras = new List<IMyCameraBlock>();
@@ -27,7 +27,7 @@ DateTime blockedSince = TimeNow();
 String blockedBy = "";
 String cameraCoverage = "";
 Vector3 detourShift = new Vector3(); // docking approach: way around an obstacle
-Vector3 laneEntry; bool toLane; // straight connector lane: entry point, flying to it
+Vector3 laneEntry; bool toLane, laneTurn; // straight connector lane: entry point, flying to it, turning round there
 int detourStep = 0;
 Vector3 gridHalf = new Vector3(); // half size of the ship's grid box (grid axes)
 

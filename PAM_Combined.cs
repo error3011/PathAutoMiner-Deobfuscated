@@ -2089,6 +2089,15 @@ SpiralResult GetNextHolePosition(int holeNumber, bool reset)
 }
 
 
+// Docking at a pool connector: the recorded path ends at the home connector, among the docked ships.
+// Leave it before the waypoint that gets closer to home than the pool connector is (plus one ship
+// size), and fly to that connector's lane from there.
+bool PoolPathEnd(int idx)
+{
+    return poolDock != null && idx >= 0 && idx < waypoints.Count &&
+        Vector3.Distance(waypoints[idx].position, homeDock.position) < Vector3.Distance(poolDock.position, homeDock.position) + shipDiameter;
+}
+
 // ========================== NAVIGATION STATE MACHINE ==========================
 // (UpdateNavigation is the core state machine - extremely large)
 // See the original logic flow for all NavState transitions.
@@ -2152,7 +2161,7 @@ void UpdateNavigation()
             if (result == SpiralResult.Found)
             {
                 stuckCounter = 1;
-                SetBlocksEnabled(workTools, true);
+                SetBlocksEnabled(workTools, false); // off on the way to the hole: on when it starts the hole (Mining)
                 miningTargetPos = GetJobGridPosition(holeCol, holeRow, true);
                 // over other holes (not the next one; also when arriving from the path or the waiting
                 // spot): first over the hole, at least one ship size above the job surface, then straight
@@ -2174,7 +2183,7 @@ void UpdateNavigation()
                 return;
             }
             // no progress for 5 s (not held by traffic or the cameras): over the hole, the ground is in
-            // the way down (terrain above the job surface) -> start the hole here (drills are on);
+            // the way down (terrain above the job surface) -> start the hole here (Mining turns the drills on);
             // elsewhere a hill is in the way -> go over it, one ship size higher, then down
             if (shipSpeed < 0.3f && trafficSpeedLimit < 0 && !pathBlocked)
             {
@@ -2474,7 +2483,9 @@ void UpdateNavigation()
             }
         }
 
-        if (useDockDir)
+        if (useDockDir && currentNavState == NavState.FlyToDockArea)
+            AlignToGravity(pathFollowData.target.downDir, 90, true); // facing the way it flies: it turns round at the connector's lane
+        else if (useDockDir)
             AlignToDown(pathFollowData.target.downDir, pathFollowData.target.forwardDir, pathFollowData.target.leftDir, false);
         else if (offPath)
             AlignToGravity(pathFollowData.target.downDir, 10, true);
@@ -2486,6 +2497,7 @@ void UpdateNavigation()
 
         SetFlightTargetFull(true, false, true, navTargetPos, pathSegmentDir, currentPathWaypoint == null ? 0 : currentPathWaypoint.maxSpeed, approachSpeed);
 
+        if (currentNavState == NavState.FlyToDockArea && PoolPathEnd(pathWaypointIndex)) reachedEnd = true;
         if (reachedEnd)
         {
             waypointsRemaining = 0;
@@ -2524,18 +2536,30 @@ void UpdateNavigation()
             if (!GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos) || !GetDockApproachPosition(dock, (dockDist + 1) * shipDiameter, true, out laneEntry))
             { ShowStatusMessage(StatusMsg.ConnectorNotReady); StopAll(); return; }
             // straight lane in front of the connector: off its line -> first to the lane entry, then straight in (no diagonal past docked ships)
+            // facing the way it flies to the lane entry; turns round there (already on the lane: where it
+            // is), then backs straight in
             toLane = OffLane(navTargetPos);
-            SetFlightTarget(toLane ? laneEntry : navTargetPos, 0);
-            AlignToGravity(dock.downDir, 90, true);
+            laneTurn = !toLane;
+            if (toLane) { SetFlightTarget(laneEntry, 0); AlignToGravity(dock.downDir, 90, true); }
+            else { SetFlightTarget(shipPosition, 0); AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false); }
         }
         if (toLane && distToTarget < wpReachedDist && distToTarget != -1)
         {
-            toLane = false;
+            toLane = false; laneTurn = true;
+            SetFlightTarget(laneEntry, 0);
+            AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false);
+            return;
+        }
+        if (laneTurn)
+        {
+            statusMessage = "Docking: turning at the lane";
+            if (!isAligned) return;
+            laneTurn = false;
             GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos);
             SetFlightTarget(navTargetPos, 0);
             return;
         }
-        if (distToTarget < followPathDock * shipDiameter && distToTarget != -1)
+        if (!toLane && distToTarget < followPathDock * shipDiameter && distToTarget != -1)
         {
             SetFlightTarget(navTargetPos, 10);
             AlignToDown(dock.downDir, dock.forwardDir, dock.leftDir, false);
@@ -5559,7 +5583,7 @@ string FormatVector(Vector3 v) { return "X" + FormatFloat(v.X) + "Y" + FormatFlo
 // the other; if none works it stays where it is ("Docking blocked").
 // Active only for free flight: path flights and hole-to-hole moves. Off while mining, backing
 // out of a hole and docking, where the ship is meant to be close to voxels and blocks. Terrain
-// (planet/asteroid) doesn't count between holes (the drills are on and the hole tops sit on the
+// (planet/asteroid) doesn't count between holes (the hole tops sit on the
 // ground) or right at the flight target (recorded spots close to the ground).
 
 List<IMyCameraBlock> cameras = new List<IMyCameraBlock>();
@@ -5572,7 +5596,7 @@ DateTime blockedSince = TimeNow();
 String blockedBy = "";
 String cameraCoverage = "";
 Vector3 detourShift = new Vector3(); // docking approach: way around an obstacle
-Vector3 laneEntry; bool toLane; // straight connector lane: entry point, flying to it
+Vector3 laneEntry; bool toLane, laneTurn; // straight connector lane: entry point, flying to it, turning round there
 int detourStep = 0;
 Vector3 gridHalf = new Vector3(); // half size of the ship's grid box (grid axes)
 
@@ -6729,14 +6753,13 @@ String BuildStationMessage()
         IMyShipConnector c = stationDocks[i];
         msg += (i > 0 ? ":" : "") + c.EntityId + "," + VectorToString(c.GetPosition()) + "," + VectorToString(c.WorldMatrix.Forward) + "," + VectorToString(c.WorldMatrix.Up);
     }
-    // docking area: a sphere around each [PAM-Zone] sensor that contains its whole detection box
-    // (whichever way the sensor faces); ships wait outside it
+    // docking area: each [PAM-Zone] sensor's detection box (position, orientation, extents); ships wait outside it
     msg += ";";
     for (int i = 0; i < zoneSensors.Count; i++)
     {
         IMySensorBlock z = zoneSensors[i];
-        double r = new Vector3D(Math.Max(z.LeftExtend, z.RightExtend), Math.Max(z.TopExtend, z.BottomExtend), Math.Max(z.FrontExtend, z.BackExtend)).Length();
-        msg += (i > 0 ? ":" : "") + VectorToString(z.GetPosition()) + "," + Math.Round(r, 1);
+        msg += (i > 0 ? ":" : "") + VectorToString(z.GetPosition()) + "," + VectorToString(z.WorldMatrix.Forward) + "," + VectorToString(z.WorldMatrix.Up) + "," +
+            z.LeftExtend + "," + z.RightExtend + "," + z.TopExtend + "," + z.BottomExtend + "," + z.FrontExtend + "," + z.BackExtend;
     }
     return msg;
 }
@@ -6770,8 +6793,8 @@ int stationClearedKind = 0;
 long stationConn = 0;
 bool waitUndockClearance = false;
 int dockRequestTick = 0;
-List<Vector3> zoneCenters = new List<Vector3>(); // the station's [PAM-Zone] sensor areas (bounding spheres)
-List<float> zoneRadii = new List<float>();
+List<Vector3> zoneCenters = new List<Vector3>(); // the station's [PAM-Zone] sensor areas: boxes, as the sensor sees
+List<Vector3> zoneBox = new List<Vector3>();      // 4 per area: forward, up, extents left/bottom/back, right/top/front
 bool dockQueued = false;  // holding outside the docking area for clearance (sent in traffic messages)
 bool outOfService = false; // can't dock (connector damaged): parked beside the path, others pass it
 bool dockHoldSet = false;
@@ -6851,15 +6874,17 @@ void ParseStation(String data)
         String[] c = cl[i].Split(':');
         if (c.Length == 3 && c[0] == myGridId.ToString()) { stationCleared = myGridId; stationClearedKind = int.Parse(c[1]); stationConn = long.Parse(c[2]); }
     }
-    zoneCenters.Clear(); zoneRadii.Clear();
+    zoneCenters.Clear(); zoneBox.Clear();
     if (f.Length >= 8 && f[7] != "")
     {
         String[] z = f[7].Split(':');
         for (int i = 0; i < z.Length; i++)
         {
+            // pos,forward,up,left,right,top,bottom,front,back (older controller: pos,radius -> a box around that sphere)
             String[] e = z[i].Split(',');
-            if (e.Length < 2) continue;
-            zoneCenters.Add(StringToVector(e[0])); zoneRadii.Add(float.Parse(e[1]));
+            if (e.Length >= 9) AddZone(StringToVector(e[0]), StringToVector(e[1]), StringToVector(e[2]),
+                new Vector3(float.Parse(e[3]), float.Parse(e[6]), float.Parse(e[8])), new Vector3(float.Parse(e[4]), float.Parse(e[5]), float.Parse(e[7])));
+            else if (e.Length >= 2) { float r = float.Parse(e[1]); AddZone(StringToVector(e[0]), Vector3.Forward, Vector3.Up, new Vector3(r), new Vector3(r)); }
         }
     }
     // the station's own list of pool connectors: lets ships use the pool before docking there once
@@ -6902,9 +6927,18 @@ bool ApplyStationDock()
     return true;
 }
 
+void AddZone(Vector3 pos, Vector3 fwd, Vector3 up, Vector3 lo, Vector3 hi) { zoneCenters.Add(pos); zoneBox.Add(fwd); zoneBox.Add(up); zoneBox.Add(lo); zoneBox.Add(hi); }
+
+// inside a docking area's sensor box, or closer to it than about half the ship's size
 bool InDockZone(Vector3 p)
 {
-    for (int i = 0; i < zoneCenters.Count; i++) if (Vector3.Distance(p, zoneCenters[i]) < zoneRadii[i] + shipDiameter * 0.75f) return true;
+    float m = shipDiameter * 0.6f;
+    for (int i = 0; i < zoneCenters.Count; i++)
+    {
+        Vector3 d = p - zoneCenters[i], f = zoneBox[i * 4], u = zoneBox[i * 4 + 1], lo = zoneBox[i * 4 + 2], hi = zoneBox[i * 4 + 3];
+        float x = Vector3.Dot(d, Vector3.Cross(f, u)), y = Vector3.Dot(d, u), z = Vector3.Dot(d, f);
+        if (x > -lo.X - m && x < hi.X + m && y > -lo.Y - m && y < hi.Y + m && z > -lo.Z - m && z < hi.Z + m) return true;
+    }
     return false;
 }
 
@@ -7400,7 +7434,7 @@ void UpdateStagedHome()
 //  - with debugDraw on the ships too: blue line to each ship's flight target, its camera rays
 //    (green clear, red hit), and the hole grid of each job (grey done, orange claimed with a line
 //    from the ship to its hole, white free)
-//  - docking area: [PAM-Zone] spheres, [PAM-Lane] camera rays, green line from the ship cleared
+//  - docking area: [PAM-Zone] sensor boxes, [PAM-Lane] camera rays, green line from the ship cleared
 //    to dock to its connector
 // Text labels (HUD markers) name the ships with their state, the conflicts (who gives way), the
 // claimed holes, the docking area and the cleared ship. The colour key is in the PB's output.
@@ -7547,7 +7581,14 @@ void UpdateDebugDraw()
     for (int i = 0; i < zoneSensors.Count; i++)
     {
         IMySensorBlock z = zoneSensors[i];
-        dbg.Sphere(z.GetPosition(), new Vector3D(Math.Max(z.LeftExtend, z.RightExtend), Math.Max(z.TopExtend, z.BottomExtend), Math.Max(z.FrontExtend, z.BackExtend)).Length(), Color.Cyan);
+        // the sensor box: 12 edges
+        MatrixD m = z.WorldMatrix;
+        Vector3D[] c = new Vector3D[8];
+        for (int k = 0; k < 8; k++)
+            c[k] = z.GetPosition() + m.Right * ((k & 1) == 0 ? -z.LeftExtend : z.RightExtend) + m.Up * ((k & 2) == 0 ? -z.BottomExtend : z.TopExtend) + m.Forward * ((k & 4) == 0 ? -z.BackExtend : z.FrontExtend);
+        for (int k = 0; k < 8; k++)
+            for (int b = 1; b < 8; b <<= 1)
+                if ((k & b) == 0) dbg.Line(c[k], c[k | b], Color.Cyan, 0.1f);
         dbg.Label("Docking area" + (dockAreaStatus != "" ? ": " + dockAreaStatus : ""), z.GetPosition(), Color.Cyan);
     }
     for (int i = 0; i < laneCameras.Count; i++)
@@ -7588,7 +7629,7 @@ String GetDebugDrawLegend()
         "Red line: collision course (label: who gives way)\n" +
         "Blue: flight target; thin green/red: camera rays (clear/hit)\n" +
         "Points: grey hole done, orange claimed, white free\n" +
-        "Cyan sphere: docking area, purple: lane cameras\n" +
+        "Cyan box: docking area, purple: lane cameras\n" +
         "Thick green: ship cleared to its connector\n";
 }
 

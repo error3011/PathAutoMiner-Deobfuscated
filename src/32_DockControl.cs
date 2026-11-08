@@ -224,14 +224,13 @@ String BuildStationMessage()
         IMyShipConnector c = stationDocks[i];
         msg += (i > 0 ? ":" : "") + c.EntityId + "," + VectorToString(c.GetPosition()) + "," + VectorToString(c.WorldMatrix.Forward) + "," + VectorToString(c.WorldMatrix.Up);
     }
-    // docking area: a sphere around each [PAM-Zone] sensor that contains its whole detection box
-    // (whichever way the sensor faces); ships wait outside it
+    // docking area: each [PAM-Zone] sensor's detection box (position, orientation, extents); ships wait outside it
     msg += ";";
     for (int i = 0; i < zoneSensors.Count; i++)
     {
         IMySensorBlock z = zoneSensors[i];
-        double r = new Vector3D(Math.Max(z.LeftExtend, z.RightExtend), Math.Max(z.TopExtend, z.BottomExtend), Math.Max(z.FrontExtend, z.BackExtend)).Length();
-        msg += (i > 0 ? ":" : "") + VectorToString(z.GetPosition()) + "," + Math.Round(r, 1);
+        msg += (i > 0 ? ":" : "") + VectorToString(z.GetPosition()) + "," + VectorToString(z.WorldMatrix.Forward) + "," + VectorToString(z.WorldMatrix.Up) + "," +
+            z.LeftExtend + "," + z.RightExtend + "," + z.TopExtend + "," + z.BottomExtend + "," + z.FrontExtend + "," + z.BackExtend;
     }
     return msg;
 }
