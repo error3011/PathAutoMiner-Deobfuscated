@@ -89,7 +89,8 @@ void UpdateTrafficControl()
 void ComputeTrafficControl()
 {
     for (int i = tcShips.Count - 1; i >= 0; i--)
-        if ((TimeNow() - tcShips[i].time).TotalSeconds > 3) { AddLog("Contact lost: " + TCName(tcShips[i])); tcShips.RemoveAt(i); }
+        // stopped ships (docked, idle) run and send less often: kept longer
+        if ((TimeNow() - tcShips[i].time).TotalSeconds > (tcShips[i].vel.LengthSquared() < 0.25f ? 12 : 3)) { AddLog("Contact lost: " + TCName(tcShips[i])); tcShips.RemoveAt(i); }
     for (int i = tcPairs.Count - 1; i >= 0; i--)
         if ((TimeNow() - tcPairs[i].last).TotalSeconds > 2) tcPairs.RemoveAt(i); // conflict over: forget who gave way
     for (int i = 0; i < tcShips.Count; i++) tcShips[i].limit = -1;

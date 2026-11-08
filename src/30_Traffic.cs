@@ -71,7 +71,8 @@ void UpdateTraffic()
         if (data != null) ParseTraffic(data);
     }
     for (int i = traffic.Count - 1; i >= 0; i--)
-        if ((TimeNow() - traffic[i].time).TotalSeconds > TRAFFIC_TIMEOUT) traffic.RemoveAt(i);
+        // stopped ships (docked, idle: they run and send less often) are kept longer
+        if ((TimeNow() - traffic[i].time).TotalSeconds > (traffic[i].vel.LengthSquared() < 0.25f ? 12 : TRAFFIC_TIMEOUT)) traffic.RemoveAt(i);
     if (tccListener == null) tccListener = IGC.RegisterBroadcastListener(TCC_TAG);
     budget = 5;
     while (tccListener.HasPendingMessage && budget-- > 0)
@@ -88,7 +89,7 @@ void UpdateTraffic()
     }
 
     // idle ships send too: docked (their connector counts as taken) or hovering (an obstacle)
-    if (++trafficTick < 3) return; // ~2 messages per second
+    if (++trafficTick < (currentNavState == NavState.Idle ? 1 : 3)) return; // ~2 messages per second (idle: runs every ~1.7 s, sends each time)
     trafficTick = 0;
     Vector3 g = remoteControl.GetNaturalGravity();
     if (g.LengthSquared() > 0.01f) g.Normalize();

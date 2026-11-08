@@ -1,6 +1,6 @@
 # Identifier mapping (original -> minified)
 Acceleration -> ΒІ
-Active -> Ю
+Active -> Я
 ActiveHome -> Απ
 ActiveJob -> Αρ
 AddBlockInventory -> Ηϋ
@@ -49,7 +49,7 @@ BuildShipScreen -> ΛΤ
 BuildStationMessage -> ΛΥ
 BuildTrafficControlMessage -> ΛΦ
 CB -> Ας
-CF -> Я
+CF -> а
 CFG_MARK -> ΔЅ
 CLEARANCE_TIMEOUT -> ΛΧ
 CMD_RESULT_TIME -> ΛΨ
@@ -90,7 +90,7 @@ ConfigType -> Ј
 ConfigWeightLimit -> Λθ
 ConnectorNotReady -> ΒЌ
 ContinueJob -> ş
-Controller -> Ǧ
+Controller -> ǧ
 ControllerMainLoop -> Λι
 CountBlockItems -> Λκ
 CountClear -> ΗЇ
@@ -105,7 +105,7 @@ DLine -> ΒЍ
 DOCK_TAG -> Αχ
 DText -> ę
 DamageBehavior -> Ȫ
-DataResult -> ǧ
+DataResult -> Ǩ
 DbgPath -> Λν
 DbgShip -> Αψ
 Debug -> ΔЋ
@@ -227,7 +227,7 @@ HoldQueuedShips -> ΛЎ
 HoleConflict -> ΕΜ
 HoleOwner -> ΓΚ
 HomeOrderKey -> ΛЏ
-Idle -> Ǩ
+Idle -> ǚ
 Ignore -> ΓΛ
 ImportData -> ΛА
 ImportText -> ΛБ
@@ -276,7 +276,7 @@ JobFlag -> ΜΚ
 JobKey -> š
 JobPos -> Θί
 JobRadius -> Θΰ
-JobRec -> ǚ
+JobRec -> Ǜ
 JobRunning -> ΑϏ
 JobSetup -> ΑЀ
 JobShip -> Ȭ
@@ -322,7 +322,7 @@ NextFreeHole -> ΜΡ
 NextTimerBlock -> ΓΠ
 NoAnswer -> ΓΡ
 NoData -> ΜΣ
-NoJob -> Ǜ
+NoJob -> ǜ
 Off -> Θι
 OffLane -> ΜΤ
 OnBatteriesEmpty -> Εα
@@ -548,7 +548,7 @@ all -> Ġ
 allGridBlocks -> ΑЊ
 allInventoryBlocks -> ƍ
 allThrusters -> Γε
-along -> З
+along -> И
 amount -> Р
 angle -> ǅ
 angle2 -> ΝΘ
@@ -605,7 +605,7 @@ beforeCount -> ΙΙ
 beforeItems -> ΕЍ
 beforeVol -> ΝΝ
 behavior -> ΝΞ
-best -> И
+best -> Й
 bestDist -> ΑЏ
 bestScore -> ΙΚ
 bigStep -> ΑА
@@ -623,7 +623,7 @@ broadcastEnabled -> ǋ
 broadcastExtra -> ΙΜ
 broadcastListener -> Ȓ
 broken -> ΙΝ
-budget -> ǜ
+budget -> ǝ
 cachedGridPos -> Γμ
 calcIdx -> ȓ
 cam -> Ŀ
@@ -672,9 +672,9 @@ commandSentTime -> ΙΨ
 commandState -> Ũ
 compact -> ΙΩ
 configDepth -> ћ
-configHeight -> ǝ
+configHeight -> Ǟ
 configOk -> ΒΖ
-configWidth -> Ǟ
+configWidth -> ǟ
 conn -> Т
 connBlock -> ΙΪ
 connForward -> ΝΥ
@@ -895,7 +895,7 @@ gridPos -> Ζγ
 gridPosCached -> ΙϏ
 gridTerminalSystem -> ύ
 grinders -> ΙЀ
-gyro -> а
+gyro -> б
 gyroActive -> Ζδ
 gyroSpeedLarge -> Ζε
 gyroSpeedSmall -> Ζζ
@@ -1016,10 +1016,10 @@ justLoaded -> ΚΗ
 keeping -> Νώ
 key -> Д
 keys -> Ζτ
-kind -> ǟ
+kind -> Ǡ
 label -> ơ
 labelWidth -> ΚΘ
-landingGears -> Ǡ
+landingGears -> ǡ
 laneCameras -> Ŋ
 laneEntry -> ΑΠ
 laneOffset -> Βΰ
@@ -1028,7 +1028,7 @@ laneTurn -> Βα
 last -> ī
 lastArgument -> ΝϏ
 lastDist -> Ζφ
-lastDistToTarget -> ǡ
+lastDistToTarget -> Ǣ
 lastError -> ŋ
 lastHoleIndex -> Ō
 lastJobState -> Ǭ
@@ -1056,7 +1056,7 @@ lineCount -> ΝЂ
 lineIdx -> ΚΞ
 lines -> Π
 linesPerPage -> Ββ
-list -> Е
+list -> Ж
 lo -> Βγ
 loadPercent -> ΔΙ
 loadText -> ΚΟ
@@ -1134,8 +1134,8 @@ mine -> Βε
 mineDown -> ΝЉ
 mineForward -> ΝЊ
 miningDown -> Č
-miningForward -> б
-miningTargetPos -> в
+miningForward -> в
+miningTargetPos -> г
 mode -> φ
 modeInt -> ΚΪ
 modeKey -> Ĭ
@@ -1149,7 +1149,7 @@ my -> Κέ
 myDest -> ΖЍ
 myDist -> ΝЋ
 myGridId -> ѕ
-myHole -> Ж
+myHole -> З
 myPhase -> Κή
 myPrio -> Βη
 name -> ί
@@ -1182,7 +1182,7 @@ offset -> ΑΨ
 oi -> Κη
 ok -> ĭ
 oldest -> ƨ
-onDamageBehavior -> Ǣ
+onDamageBehavior -> ǣ
 onPath -> Κθ
 order -> ŵ
 oreCount -> ΗΑ
@@ -1240,7 +1240,7 @@ prefix -> Κν
 prev -> Δα
 prevSpacing -> ΞΘ
 previous -> ΞΙ
-prio -> г
+prio -> д
 processed -> Κξ
 profilingData -> Œ
 profilingStart -> ΗΗ
@@ -1309,7 +1309,7 @@ segSpeed -> ΞΪ
 sel -> Μ
 selected -> Κτ
 selectedLine -> Αα
-selectedShip -> д
+selectedShip -> е
 send -> ΞΫ
 senderId -> Ď
 sensor -> Ѓ
@@ -1418,9 +1418,9 @@ targetPositions -> Αζ
 targetSpeed -> Ξζ
 targets -> Βψ
 tb -> ΚЋ
-tcPairs -> ǣ
+tcPairs -> Ǥ
 tcSendTick -> Ηγ
-tcShips -> ε
+tcShips -> δ
 tccLimit -> Αη
 tccListener -> Δς
 tccTime -> ΚЌ
@@ -1473,7 +1473,7 @@ totalItems -> Ηλ
 totalMax -> ΚЏ
 totalOre -> Ξυ
 totalThrustMap -> Ȧ
-traffic -> е
+traffic -> Ю
 trafficEnabled -> ȧ
 trafficHeading -> Ημ
 trafficHoldSince -> Ην
@@ -1487,16 +1487,16 @@ transferAmount -> Ηξ
 travel -> Ξφ
 tries -> ΛΑ
 trigger -> й
-triggered -> Ǥ
+triggered -> ǥ
 tw -> Δχ
 type -> Ϗ
 typeMap -> ȇ
 typeName -> ǲ
 ua -> Ƴ
 ub -> ƴ
-undockCfg -> ǥ
-undockConfig1 -> Й
-undockConfig2 -> К
+undockCfg -> Ǧ
+undockConfig1 -> К
+undockConfig2 -> Л
 undockRequested -> Βό
 unhandled -> Ηο
 unloadComplete -> Ƶ
@@ -1523,7 +1523,7 @@ useOldPath -> Ακ
 useSegment -> Ητ
 val -> Δω
 values -> Δϊ
-vel -> Л
+vel -> Е
 version -> Δϋ
 visibleLines -> Αλ
 volDiff -> ΛΓ
@@ -1560,7 +1560,7 @@ workSpeedForward -> Αξ
 workTools -> Є
 worldDir -> Ηψ
 worldPos -> ΞЀ
-wp -> δ
+wp -> ε
 wpReachDist -> ΞЁ
 wpReachedDist -> Ǐ
 wpSpeed -> ΞЍ
