@@ -285,6 +285,23 @@ void DText(String s, Vector2 at, Color c, float scale, TextAlignment align, Stri
 
 void DrawSpriteScreen(IMyTextPanel p, LCDMode mode, String param)
 {
+    // log and job: only when something changed (the drawing stays on the LCD until the next one)
+    String key = null;
+    if (mode == LCDMode.Log) key = "L" + logLines.Count + (logLines.Count > 0 ? logLines[0] : "");
+    if (mode == LCDMode.Job)
+    {
+        int n = 1;
+        int.TryParse(param, out n);
+        JobRec jr = n >= 1 && n <= jobs.Count ? jobs[n - 1] : null;
+        key = "J" + param + (jr == null ? "" : jr.done + jr.ships.Count + String.Join(",", jr.ships.Select(q => q.cell)));
+    }
+    if (key != null)
+    {
+        key += p.FontSize + p.Font + p.BackgroundColor + p.SurfaceSize;
+        String old;
+        if (screenCache.TryGetValue(p, out old) && old == key && p.ContentType == ContentType.SCRIPT) return;
+        screenCache[p] = key;
+    }
     if (p.ContentType != ContentType.SCRIPT) { p.ContentType = ContentType.SCRIPT; p.Script = ""; }
     p.ScriptBackgroundColor = new Color(0, 0, 0);
     Vector2 size = p.SurfaceSize, at = (p.TextureSize - size) / 2;
@@ -342,8 +359,11 @@ void DrawSideMap(Vector2 at, Vector2 size)
     // towards the first job (else the far end of a path, else the first ship)
     Vector3 far = o;
     if (jobs.Count > 0) far = JobPos(jobs[0]);
-    List<Vector3> pts = new List<Vector3>();
-    foreach (String ps in shipPaths.Values) { foreach (String w in ps.Split(':')) if (w != "") pts.Add(StringToVector(w)); break; }
+    // the recorded path, parsed again only when it changed
+    String first = "";
+    foreach (String ps in shipPaths.Values) { first = ps; break; }
+    if (first != mapPathStr) { mapPathStr = first; mapPath.Clear(); foreach (String w in first.Split(':')) if (w != "") mapPath.Add(StringToVector(w)); }
+    List<Vector3> pts = mapPath;
     if (far == o && pts.Count > 0) far = Vector3.Distance(pts[0], o) > Vector3.Distance(pts[pts.Count - 1], o) ? pts[0] : pts[pts.Count - 1];
     if (far == o && tcShips.Count > 0) far = tcShips[0].pos;
     Vector3 along = far - o - up * Vector3.Dot(far - o, up);
@@ -413,5 +433,8 @@ void DrawSideMap(Vector2 at, Vector2 size)
     }
     DText("green moving | yellow giving way | violet waiting | grey parked | red emergency", at + new Vector2(size.X / 2, size.Y - 22), Color.Gray, 0.5f, TextAlignment.CENTER);
 }
+
+String mapPathStr = "";
+List<Vector3> mapPath = new List<Vector3>();
 
 Vector3 JobPos(JobRec job) { String[] k = job.key.Split('|'); return new Vector3(float.Parse(k[0]), float.Parse(k[1]), float.Parse(k[2])); }

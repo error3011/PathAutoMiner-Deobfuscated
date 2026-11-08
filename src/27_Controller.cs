@@ -36,17 +36,15 @@ void ControllerMainLoop(string argument)
             else return a.name.CompareTo(b.name);
         });
 
-    if (isSlowTick || firstRun)
+    // block scan, spread over 3 runs (a big station grid made one run spike): screens, docking area, broadcast
+    if (firstRun) { statusMessage = ""; firstRun = false; ScanControllerBlocks(); ScanDockArea(); InitBroadcast(); lastScanTime = TimeNow(); }
+    else if (isTick && ctrlScanStep > 0)
     {
-        if (scanCountdown <= 0 || firstRun)
-        {
-            statusMessage = "";
-            firstRun = false;
-            ScanControllerBlocks();
-            InitBroadcast();
-            lastScanTime = TimeNow();
-        }
+        if (ctrlScanStep == 1) ScanDockArea();
+        else { InitBroadcast(); lastScanTime = TimeNow(); }
+        ctrlScanStep = ctrlScanStep == 1 ? 2 : 0;
     }
+    else if (isSlowTick && scanCountdown <= 0) { statusMessage = ""; ScanControllerBlocks(); ctrlScanStep = 1; }
 
     if (isTick) UpdateDockControl(); // station dock control (clearance for one ship at a time)
     if (isTick) UpdateJobCoordination(); // co-op jobs: hand out holes
@@ -232,7 +230,6 @@ void ScanControllerBlocks()
     lcdPanels = FilterByTag(lcdPanels, pamTag, true);
     SetupTaggedSurfaces(taggedBlocks);
     SetupDebugPanels();
-    ScanDockArea();
     // controller LCDs are drawn (coloured): only their first font size, for the original screens
     foreach (IMyTextPanel q in lcdPanels) if (setLCDFontAndSize && ModeOf(q) < LCDMode.Fleet && lcdFormatted.Add(q)) q.FontSize = 1.15f;
 
@@ -257,7 +254,11 @@ void UpdateControllerDisplays()
 
     for (int i = 0; i < textSurfaces.Count; i++)
         DrawTextScreen(textSurfaces[i], BuildControllerScreenForMode(LCDMode.MainCompact, "0", false, LinesFor(textSurfaces[i])), LCDMode.MainCompact, LinesFor(textSurfaces[i]));
-    bool draw = ++screenTick % 6 == 0; // drawn screens about once a second
+    // drawn screens (map, job, log): one per run, in turn, every other tick: each about once a second with 3
+    int spriteNo = 0, spriteCount = 0;
+    foreach (IMyTextPanel q in lcdPanels) if (SpriteMode(ModeOf(q))) spriteCount++;
+    bool draw = isTick && ++screenTick % 2 == 0;
+    if (draw) spriteTurn = spriteCount > 0 ? (spriteTurn + 1) % spriteCount : 0;
     for (int i = 0; i < lcdPanels.Count; i++)
     {
         LCDMode mode = LCDMode.Unknown;
@@ -265,7 +266,7 @@ void UpdateControllerDisplays()
         IMyTextPanel p = lcdPanels[i];
         ParseLCDMode(p, out mode, out param);
         lcdFontSet = ApplyLcdFont(p);
-        if (SpriteMode(mode)) { if (draw) DrawSpriteScreen(p, mode, param); continue; }
+        if (SpriteMode(mode)) { if (draw && spriteNo == spriteTurn) DrawSpriteScreen(p, mode, param); spriteNo++; continue; }
         int lines = LinesFor(p);
         DrawTextScreen(p, BuildControllerScreenForMode(mode, param, i == 0, lines), mode, lines); // coloured lines
     }
@@ -418,6 +419,8 @@ String GetLCDModeHelp(bool withDefault)
         "\n\n//Font and size of this screen (remove the // to use):\n//font=Debug   (or Monospace, White, ...)\n//size=1.0";
     return text;
 }
+
+int ctrlScanStep = 0, spriteTurn = 0;
 
 // per LCD (its Custom Data): font=<name> and size=<number>, set on the LCD; all screens draw with them
 bool lcdFontSet = false;
