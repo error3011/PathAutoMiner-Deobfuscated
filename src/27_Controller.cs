@@ -233,8 +233,8 @@ void ScanControllerBlocks()
     SetupTaggedSurfaces(taggedBlocks);
     SetupDebugPanels();
     ScanDockArea();
-    SetLCDFormat(lcdPanels.FindAll(q => ModeOf(q) < LCDMode.Fleet), setLCDFontAndSize, 1.15f, false); // the new screens keep their own format
-    SetLCDFormat(textSurfaces, setLCDFontAndSize, 1.15f, true);
+    // controller LCDs are drawn (coloured): only their first font size, for the original screens
+    foreach (IMyTextPanel q in lcdPanels) if (setLCDFontAndSize && ModeOf(q) < LCDMode.Fleet && lcdFormatted.Add(q)) q.FontSize = 1.15f;
 
     // Write the LCD mode template into empty Custom Data; flag outdated Custom Data.
     String helpText = GetLCDModeHelp(false);
@@ -256,7 +256,7 @@ void UpdateControllerDisplays()
         "*[SENDALL] = Cmd to all ships:\n" + " e.g.: \"SENDALL homepos\"\n\n";
 
     for (int i = 0; i < textSurfaces.Count; i++)
-        textSurfaces[i].WriteText(BuildControllerScreenForMode(LCDMode.MainCompact, "0", false, LinesFor(textSurfaces[i])));
+        DrawTextScreen(textSurfaces[i], BuildControllerScreenForMode(LCDMode.MainCompact, "0", false, LinesFor(textSurfaces[i])), LCDMode.MainCompact, LinesFor(textSurfaces[i]));
     bool draw = ++screenTick % 6 == 0; // drawn screens about once a second
     for (int i = 0; i < lcdPanels.Count; i++)
     {
@@ -265,9 +265,8 @@ void UpdateControllerDisplays()
         IMyTextPanel p = lcdPanels[i];
         ParseLCDMode(p, out mode, out param);
         if (SpriteMode(mode)) { if (draw) DrawSpriteScreen(p, mode, param); continue; }
-        if (p.ContentType != ContentType.TEXT_AND_IMAGE) p.ContentType = ContentType.TEXT_AND_IMAGE;
-        if (mode == LCDMode.Fleet && setLCDFontAndSize && p.Font != "Monospace") p.Font = "Monospace"; // table columns
-        p.WriteText(BuildControllerScreenForMode(mode, param, i == 0, LinesFor(p)));
+        int lines = LinesFor(p);
+        DrawTextScreen(p, BuildControllerScreenForMode(mode, param, i == 0, lines), mode, lines); // coloured lines
     }
     Echo(echoText + GetDebugDrawLegend());
     for (int i = 0; i < debugPanels.Count; i++)

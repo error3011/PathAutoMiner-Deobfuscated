@@ -5148,8 +5148,8 @@ void ScanControllerBlocks()
     SetupTaggedSurfaces(taggedBlocks);
     SetupDebugPanels();
     ScanDockArea();
-    SetLCDFormat(lcdPanels.FindAll(q => ModeOf(q) < LCDMode.Fleet), setLCDFontAndSize, 1.15f, false); // the new screens keep their own format
-    SetLCDFormat(textSurfaces, setLCDFontAndSize, 1.15f, true);
+    // controller LCDs are drawn (coloured): only their first font size, for the original screens
+    foreach (IMyTextPanel q in lcdPanels) if (setLCDFontAndSize && ModeOf(q) < LCDMode.Fleet && lcdFormatted.Add(q)) q.FontSize = 1.15f;
 
     // Write the LCD mode template into empty Custom Data; flag outdated Custom Data.
     String helpText = GetLCDModeHelp(false);
@@ -5171,7 +5171,7 @@ void UpdateControllerDisplays()
         "*[SENDALL] = Cmd to all ships:\n" + " e.g.: \"SENDALL homepos\"\n\n";
 
     for (int i = 0; i < textSurfaces.Count; i++)
-        textSurfaces[i].WriteText(BuildControllerScreenForMode(LCDMode.MainCompact, "0", false, LinesFor(textSurfaces[i])));
+        DrawTextScreen(textSurfaces[i], BuildControllerScreenForMode(LCDMode.MainCompact, "0", false, LinesFor(textSurfaces[i])), LCDMode.MainCompact, LinesFor(textSurfaces[i]));
     bool draw = ++screenTick % 6 == 0; // drawn screens about once a second
     for (int i = 0; i < lcdPanels.Count; i++)
     {
@@ -5180,9 +5180,8 @@ void UpdateControllerDisplays()
         IMyTextPanel p = lcdPanels[i];
         ParseLCDMode(p, out mode, out param);
         if (SpriteMode(mode)) { if (draw) DrawSpriteScreen(p, mode, param); continue; }
-        if (p.ContentType != ContentType.TEXT_AND_IMAGE) p.ContentType = ContentType.TEXT_AND_IMAGE;
-        if (mode == LCDMode.Fleet && setLCDFontAndSize && p.Font != "Monospace") p.Font = "Monospace"; // table columns
-        p.WriteText(BuildControllerScreenForMode(mode, param, i == 0, LinesFor(p)));
+        int lines = LinesFor(p);
+        DrawTextScreen(p, BuildControllerScreenForMode(mode, param, i == 0, lines), mode, lines); // coloured lines
     }
     Echo(echoText + GetDebugDrawLegend());
     for (int i = 0; i < debugPanels.Count; i++)
@@ -7946,6 +7945,56 @@ String BuildShipScreen(String name)
     return text;
 }
 
+// ---- text screens drawn in colour (main, menus, inventory, fleet, ship) ----
+Dictionary<IMyTextSurface, String> screenCache = new Dictionary<IMyTextSurface, String>();
+
+// colour of a text line by what it says (default: the LCD's font colour)
+Color LineColor(String l, LCDMode mode, Color def)
+{
+    String t = l.Trim();
+    if (t.StartsWith("—") || t.StartsWith("---")) return Color.Gray;
+    if (mode == LCDMode.Fleet && t.StartsWith("Ship ")) return Color.Gray; // table header
+    if (l.Contains("EMERGENCY") || l.Contains(" EMG") || l.Contains("no answer") || l.Contains("NO CONTACT") || l.Contains("No signal") || l.Contains("Different version")) return Color.Red;
+    if (t.StartsWith("Battery"))
+    {
+        int b = -1;
+        int.TryParse(new String(t.Substring(7).Trim().TakeWhile(char.IsDigit).ToArray()), out b);
+        return b < 0 ? def : b >= 50 ? Color.LimeGreen : b >= 20 ? Color.Yellow : Color.Red;
+    }
+    if (l.Contains(" GIVE") || l.Contains("giving way") || l.Contains("pending") || t.StartsWith("Traffic:")) return Color.Yellow;
+    if (l.Contains(" WAIT") || l.Contains("waiting to leave")) return Color.Violet;
+    if (l.Contains("PARKED")) return Color.Gray;
+    if (l.Contains("CLEARED") || l.Contains("received") || l.Contains("Job active")) return Color.LimeGreen;
+    if (l.Contains("QUEUE") || t.StartsWith("Dock")) return Color.SkyBlue;
+    if (t.StartsWith("Job")) return Color.Orange;
+    if (t.StartsWith("[") || t.Contains("[|")) return new Color(200, 160, 80); // cargo / inventory bars
+    return def;
+}
+
+// a text screen as coloured lines; the LCD's font, size, padding and colours; the selected menu line
+// highlighted; redrawn only when something changed
+void DrawTextScreen(IMyTextSurface p, String text, LCDMode mode, int lines)
+{
+    String font = mode == LCDMode.Fleet ? "Monospace" : p.Font; // table columns
+    String key = text + p.FontSize + font + p.FontColor + p.BackgroundColor + p.TextPadding, old;
+    if (screenCache.TryGetValue(p, out old) && old == key && p.ContentType == ContentType.SCRIPT) return;
+    screenCache[p] = key;
+    if (p.ContentType != ContentType.SCRIPT) { p.ContentType = ContentType.SCRIPT; p.Script = ""; }
+    p.ScriptBackgroundColor = p.BackgroundColor;
+    Vector2 size = p.SurfaceSize, at = (p.TextureSize - size) / 2;
+    float sc = Math.Max(0.1f, p.FontSize), pad = size.Y * p.TextPadding / 100f;
+    float lh = Math.Min(p.MeasureStringInPixels(new StringBuilder("Ag"), font, sc).Y, (size.Y - 2 * pad) / Math.Max(1, lines));
+    drawFrame = p.DrawFrame();
+    String[] ls = text.Split('\n');
+    float y = at.Y + pad;
+    for (int i = 0; i < ls.Length && y + lh <= at.Y + size.Y - pad + 1; i++, y += lh)
+    {
+        if (ls[i].StartsWith(">")) DBox(new Vector2(at.X + size.X / 2, y + lh / 2), new Vector2(size.X, lh), new Color(25, 45, 80), "SquareSimple");
+        DText(ls[i], new Vector2(at.X + pad, y), LineColor(ls[i], mode, p.FontColor), sc, TextAlignment.LEFT, font);
+    }
+    drawFrame.Dispose();
+}
+
 // colour of a log event by its kind
 Color LogColor(String msg)
 {
@@ -8003,9 +8052,9 @@ void DLine(Vector2 a, Vector2 b, Color c, float w)
 
 void DBox(Vector2 center, Vector2 size, Color c, String shape) { drawFrame.Add(new MySprite(SpriteType.TEXTURE, shape, center, size, c)); }
 
-void DText(String s, Vector2 at, Color c, float scale, TextAlignment align)
+void DText(String s, Vector2 at, Color c, float scale, TextAlignment align, String font = "Debug")
 {
-    MySprite t = MySprite.CreateText(s, "Debug", c, scale, align);
+    MySprite t = MySprite.CreateText(s, font, c, scale, align);
     t.Position = at;
     drawFrame.Add(t);
 }
