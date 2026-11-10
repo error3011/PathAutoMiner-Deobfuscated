@@ -404,6 +404,8 @@ def minimize_spaces(code):
     tokens = tokenize_cs(code)
     result = []
     for i, (tok, typ) in enumerate(tokens):
+        if typ == 'number':
+            tok = shorten_number(tok, tokens[i-1][0] if i > 0 else '')
         if i > 0:
             prev_tok, prev_typ = tokens[i-1]
             need_space = False
@@ -427,6 +429,69 @@ def minimize_spaces(code):
                 result.append(' ')
         result.append(tok)
     return ''.join(result)
+
+
+# ─── Aliases: often-used literals / API calls replaced by a short const or helper ───
+# Each entry: (regex for one use, declaration with {n} as the name, text that replaces one use).
+# The declarations are added at the top of the body and {n} goes through the normal renaming,
+# so the most used aliases get the shortest names. Helpers are static (callable from nested
+# classes) and have exactly the parameter types of the API they wrap, so overloads resolve
+# the same way. An alias is only used when it saves characters.
+ALIASES = [
+    (r'(?<![\w.])true\b', 'const bool {n}=true;', '{n}'),
+    (r'(?<![\w.])false\b', 'const bool {n}=false;', '{n}'),
+    (r'(?<![\w.])MyShipConnectorStatus\.Connected\b',
+     'const MyShipConnectorStatus {n}=MyShipConnectorStatus.Connected;', '{n}'),
+    (r'(?<![\w.])MyShipConnectorStatus\.Connectable\b',
+     'const MyShipConnectorStatus {n}=MyShipConnectorStatus.Connectable;', '{n}'),
+    (r'(?<![\w.])Vector3\.Distance\s*\(',
+     'static float {n}(Vector3 a,Vector3 b){return Vector3.Distance(a,b);}', '{n}('),
+    (r'(?<![\w.])Vector3\.Dot\s*\(',
+     'static float {n}(Vector3 a,Vector3 b){return Vector3.Dot(a,b);}', '{n}('),
+    (r'(?<![\w.])Vector3\.Normalize\s*\(',
+     'static Vector3 {n}(Vector3 a){return Vector3.Normalize(a);}', '{n}('),
+    (r'(?<![\w.])Math\.Round\s*\(',
+     'static double {n}(double v,int d=0){return Math.Round(v,d);}', '{n}('),
+    (r'(?<![\w.])GridTerminalSystem\.GetBlocksOfType\s*\(',
+     'void {n}<T>(List<T>l,Func<T,bool>f=null)where T:class{GridTerminalSystem.GetBlocksOfType(l,f);}', '{n}('),
+]
+ALIAS_PREFIX = "__ALIAS"
+
+def apply_aliases(code):
+    """Replace the uses of each worthwhile alias with a placeholder name and prepend its
+    declaration. Returns (code, placeholder names). Strings must already be extracted."""
+    decls = []
+    names = []
+    for i, (pat, decl, use) in enumerate(ALIASES):
+        n = ALIAS_PREFIX + str(i)
+        uses = re.findall(pat, code)
+        if not uses:
+            continue
+        # assume a 2-char name: saved per use vs. the declaration's cost
+        saved = sum(len(u) for u in uses) - len(uses) * len(use.replace("{n}", "xx"))
+        if saved - len(decl.replace("{n}", "xx")) <= 0:
+            continue
+        code = re.sub(pat, use.replace("{n}", n), code)
+        decls.append(decl.replace("{n}", n))
+        names.append(n)
+    return "".join(decls) + "\n" + code, names
+
+
+def shorten_number(tok, prev_tok):
+    """0.5f -> .5f, 1.50f -> 1.5f, 2.0f -> 2f (same value and type)."""
+    m = re.match(r'^(\d+)\.(\d+)([fFdDmM]?)$', tok)
+    if not m:
+        return tok
+    whole, frac, suf = m.groups()
+    frac = frac.rstrip('0')
+    if not frac:
+        # 2.0f -> 2f is the same float; a bare 2.0 is a double and must keep a marker
+        if suf:
+            return whole + suf
+        return tok
+    if whole == '0' and prev_tok != '?':   # "?.5" would read like the ?. operator
+        whole = ''
+    return whole + '.' + frac + suf
 
 CONFIG_END_MARKER = "// ===== End of settings: don't edit below this line ====="
 
@@ -454,6 +519,9 @@ def _minify_body(source_code, extra_protected):
     
     # Step 2: Extract string literals
     code, strings = extract_strings(code)
+
+    # Step 2b: Aliases for often-used literals / API calls
+    code, alias_names = apply_aliases(code)
     
     # Step 3: Find all identifiers
     all_idents = find_identifiers(code)
@@ -468,6 +536,9 @@ def _minify_body(source_code, extra_protected):
         if ident in protected:
             continue
         if ident.startswith("__STR"):
+            continue
+        if ident in alias_names:
+            user_idents.add(ident)
             continue
         if len(ident) <= 1:
             continue

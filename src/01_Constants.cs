@@ -17,10 +17,7 @@ const string VERSION = "1.3.1";
 const string DATAREV = "14";
 
 // ===== Settings =====
-// The settings are in this PB's Custom Data, in the [PAM settings] section (written with the
-// defaults on the first run; each script lists only the settings it uses). Edit them there, then
-// press Recompile. Delete a line to get its default back. They are kept when you paste a new
-// version of the script. Descriptions: README, section Settings.
+// In this PB's Custom Data, section [PAM settings], then Recompile. See README, Settings.
 
 // ===== End of settings: don't edit below this line =====
 
@@ -58,6 +55,22 @@ float obstacleTimeout = 10f;
 bool trafficEnabled = true;
 float laneOffset = 0.75f;
 float followGap = 1f;
+bool trafficHullCover = true;
+float trafficPadding = 0f;
+float trafficStuckTime = 15f;
+float trafficEscapeTime = 10f;
+float followTime = 2f;
+float trafficTimeout = 5f;
+int dockRetries = 3;
+float moveAsideSpeed = 2f;
+float emergencySpeed = 3f;
+float laneTurnTime = 8f;
+float holeStuckTime = 5f;
+float coopWaitHeight = 2.5f;
+float tccHorizon = 8f;
+float clearanceTimeout = 120f;
+float jobShipTimeout = 600f;
+float laneClearTime = 3f;
 bool resumeAfterRestart = true;
 const bool checkConveyorSystem = false; //temporarily disabled because of a SE bug
 bool debugDraw = false;

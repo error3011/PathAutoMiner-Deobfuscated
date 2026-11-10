@@ -58,6 +58,18 @@ void LoadShipSettings()
     obstacleTimeout = CF("obstacleTimeout", obstacleTimeout);
     laneOffset = CF("laneOffset", laneOffset);
     followGap = CF("followGap", followGap);
+    trafficHullCover = CB("trafficHullCover", trafficHullCover);
+    trafficPadding = CF("trafficPadding", trafficPadding);
+    trafficStuckTime = CF("trafficStuckTime", trafficStuckTime);
+    trafficEscapeTime = CF("trafficEscapeTime", trafficEscapeTime);
+    followTime = Math.Max(0.1f, CF("followTime", followTime));
+    trafficTimeout = CF("trafficTimeout", trafficTimeout);
+    dockRetries = Math.Max(1, (int)CF("dockRetries", dockRetries));
+    moveAsideSpeed = CF("moveAsideSpeed", moveAsideSpeed);
+    emergencySpeed = CF("emergencySpeed", emergencySpeed);
+    laneTurnTime = CF("laneTurnTime", laneTurnTime);
+    holeStuckTime = CF("holeStuckTime", holeStuckTime);
+    coopWaitHeight = CF("coopWaitHeight", coopWaitHeight);
     resumeAfterRestart = CB("resumeAfterRestart", resumeAfterRestart);
 }
 
@@ -67,6 +79,10 @@ void LoadControllerSettings()
     laneTag = CS("laneTag", laneTag);
     dockLaneLength = CF("dockLaneLength", dockLaneLength);
     lcdLineHeight = CF("lcdLineHeight", lcdLineHeight);
+    tccHorizon = CF("tccHorizon", tccHorizon);
+    clearanceTimeout = CF("clearanceTimeout", clearanceTimeout);
+    jobShipTimeout = CF("jobShipTimeout", jobShipTimeout);
+    laneClearTime = CF("laneClearTime", laneClearTime);
 }
 
 // the setting's value from Custom Data (or the default), written back to the section

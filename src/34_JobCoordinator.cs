@@ -2,9 +2,8 @@
 // The controller listens to the ships' traffic messages and keeps the master record of each co-op
 // job: finished holes and which ship has which hole. A ship that needs a hole sets a want flag;
 // the controller assigns the next free hole in the mining order and broadcasts the job state twice a second. Claims are kept while a ship is out of
-// range (e.g. unloading far away) and dropped after JOB_SHIP_TIMEOUT without a message.
+// range (e.g. unloading far away) and dropped after jobShipTimeout (600 s) without a message.
 
-const float JOB_SHIP_TIMEOUT = 600f; //[s]
 
 class JobShip
 {
@@ -46,7 +45,7 @@ void UpdateJobCoordination()
     {
         JobRec job = jobs[j];
         for (int i = job.ships.Count - 1; i >= 0; i--)
-            if ((TimeNow() - job.ships[i].seen).TotalSeconds > JOB_SHIP_TIMEOUT) job.ships.RemoveAt(i);
+            if ((TimeNow() - job.ships[i].seen).TotalSeconds > jobShipTimeout) job.ships.RemoveAt(i);
         if (job.ships.Count == 0) { jobs.RemoveAt(j); continue; }
         AssignJobHoles(job);
     }

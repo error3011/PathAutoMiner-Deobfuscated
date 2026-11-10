@@ -9,7 +9,7 @@
 // while the conflict lasts (unless a right of way changes), so it can't flip back and forth. Ships parked or
 // hovering without wanting to move are obstacles for the ships' own avoidance, not for this.
 
-const float TCC_HORIZON = 8f; //[s] how far ahead conflicts are predicted
+// tccHorizon [s]: how far ahead conflicts are predicted
 
 class TCShip
 {
@@ -121,7 +121,7 @@ void ComputeTrafficControl()
             float ru2 = ru.LengthSquared();
             float t = ru2 > 0.01f ? -Vector3.Dot(rel, ru) / ru2 : 0;
             bool tooClose = dist < clear;
-            if (!tooClose && (t <= 0 || t > TCC_HORIZON || (rel + ru * t).Length() >= clear)) continue;
+            if (!tooClose && (t <= 0 || t > tccHorizon || (rel + ru * t).Length() >= clear)) continue;
             // head-on: the ships pass each other on the right themselves (holding one would stop it from
             // stepping aside); the controller handles ships catching up and crossing paths
             if (!tooClose && a.prio == b.prio && ua.LengthSquared() > 0.25f && ub.LengthSquared() > 0.25f && Vector3.Dot(Vector3.Normalize(ua), Vector3.Normalize(ub)) < -0.7f)

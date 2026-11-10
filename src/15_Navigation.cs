@@ -103,12 +103,12 @@ void UpdateNavigation()
                 if (!coopWaiting || (claimed == -2) != coopWaitAside)
                 {
                     coopWaiting = true; coopWaitAside = claimed == -2;
-                    // waiting spot: on a ring 2.5 ship sizes above the job centre, above everyone working
+                    // waiting spot: on a ring coopWaitHeight (2.5) ship sizes above the job centre, above everyone working
                     // or passing (always clear of terrain), each ship on its own place of the ring
                     int slot = 0; // rank among the ships on this job
                     for (int i = 0; i < traffic.Count; i++) if (traffic[i].job == JobKey() && traffic[i].id < myGridId) slot++;
                     double a = slot % 6 * Math.PI / 3;
-                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter * 2.5f +
+                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter * coopWaitHeight +
                         (jobPosition.leftDir * (float)Math.Cos(a) + miningDown * (float)Math.Sin(a)) * shipDiameter * 1.2f;
                 }
                 SetFlightTarget(coopWaitPos, 10);
@@ -152,12 +152,12 @@ void UpdateNavigation()
                 SetNavState(NavState.Mining);
                 return;
             }
-            // no progress for 5 s (not held by traffic or the cameras): over the hole, the ground is in
+            // no progress for holeStuckTime (5 s, not held by traffic or the cameras): over the hole, the ground is in
             // the way down (terrain above the job surface) -> start the hole here (Mining turns the drills on);
             // elsewhere a hill is in the way -> go over it, one ship size higher, then down
             if (shipSpeed < 0.3f && trafficSpeedLimit < 0 && !pathBlocked)
             {
-                if (++stuckCounter < 30) return;
+                if (++stuckCounter < holeStuckTime * 6) return;
                 stuckCounter = 1;
                 Vector3 off = miningTargetPos - shipPosition;
                 float along = Vector3.Dot(off, miningForward);
@@ -535,7 +535,7 @@ void UpdateNavigation()
         if (laneTurn)
         {
             statusMessage = "Docking: turning at the lane";
-            if (!isAligned && ++stuckCounter < 48) return; // at most 8 s (weak gyros, heavy cargo): then on anyway
+            if (!isAligned && ++stuckCounter < laneTurnTime * 6) return; // at most laneTurnTime (8 s) (weak gyros, heavy cargo): then on anyway
             laneTurn = false; statusMessage = "";
             GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos);
             SetFlightTarget(navTargetPos, 0);
@@ -550,8 +550,8 @@ void UpdateNavigation()
         if (detourShift.LengthSquared() > 0 && distToTarget < wpReachedDist && distToTarget != -1) { detourShift = new Vector3(); return; }
         if (distToTarget < wpReachedDist / 2 && distToTarget != -1)
         {
-            // the connector didn't lock 3 times: leave it, ask for another one
-            if (dockTries >= 3 && shipMode != ShipMode.Shuttle)
+            // the connector didn't lock dockRetries (3) times: leave it, ask for another one
+            if (dockTries >= dockRetries && shipMode != ShipMode.Shuttle)
             {
                 badDocks.Add(poolDock != null ? poolDockId : homeConnId); // keeps asking: the station drops that clearance, the ship keeps its place
                 dockTries = 0;

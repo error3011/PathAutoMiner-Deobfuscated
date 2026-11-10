@@ -9,8 +9,8 @@
 //    ships have or are too close to, and share which holes are finished
 
 const String TRAFFIC_TAG = "[PAMTFC]";
-const float TRAFFIC_TIMEOUT = 5f; //[s] forget ships not heard from for this long
-const float FOLLOW_TIME = 2f;     //[s] time to close the gap to a ship ahead
+// trafficTimeout [s]: forget ships not heard from for this long (stopped ships: at least 12 s)
+// followTime [s]: time to close the gap to a ship ahead
 
 class TrafficShip
 {
@@ -39,8 +39,7 @@ float trafficSpeedLimit = -1; // -1 = no limit
 Vector3 trafficHeading = new Vector3();
 bool trafficHolding = false;
 DateTime trafficHoldSince = TimeNow();
-const float TRAFFIC_STUCK_TIME = 15f;  //[s] held by traffic this long -> stop waiting and pass on the right
-const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
+// trafficStuckTime / trafficEscapeTime (settings): held by traffic this long -> stop waiting and pass on the right, for this long
 int trafficTick = 0;
 String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
 int myHole = -1;              // grid cell of the hole this ship works on
@@ -72,7 +71,7 @@ void UpdateTraffic()
     }
     for (int i = traffic.Count - 1; i >= 0; i--)
         // stopped ships (docked, idle: they run and send less often) are kept longer
-        if ((TimeNow() - traffic[i].time).TotalSeconds > (traffic[i].vel.LengthSquared() < 0.25f ? 12 : TRAFFIC_TIMEOUT)) traffic.RemoveAt(i);
+        if ((TimeNow() - traffic[i].time).TotalSeconds > (traffic[i].vel.LengthSquared() < 0.25f ? Math.Max(12, trafficTimeout) : trafficTimeout)) traffic.RemoveAt(i);
     if (tccListener == null) tccListener = IGC.RegisterBroadcastListener(TCC_TAG);
     budget = 5;
     while (tccListener.HasPendingMessage && budget-- > 0)
@@ -105,7 +104,7 @@ void UpdateTraffic()
         debugRays.Clear();
     }
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
-        VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
+        VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + TrafficDiameter() + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
         ";" + (outOfService || emgStage == 1 || emgStage == 2 ? 2 : dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + (sentPrio = TrafficPrio()) + "," + (sentDest = (float)Math.Round(DestDist())) + ";" + Me.GetId() +
         // for the controller's screens: battery %, hydrogen %, uranium kg, emergency, flight state, run time ms, up (x10)
@@ -354,7 +353,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         if (other.dockPhase == 3 && other.vel.LengthSquared() < 0.25f) continue; // parked at a connector
         Vector3 pos = other.pos + other.vel * (float)(TimeNow() - other.time).TotalSeconds;
         Vector3 rel = pos - shipPosition;
-        float clear = (shipDiameter + other.diameter) * 0.5f;
+        float clear = (TrafficDiameter() + other.diameter) * 0.5f;
         // two ships working the same job are aligned to it and drill different holes, so a ship at
         // another hole, even the next one, is never in the way: only closer than one hole spacing counts
         bool sameJob = other.job != "" && other.job == JobKey();
@@ -406,8 +405,8 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             }
             // same direction, or a ship that isn't moving on its own: follow at a distance, hold if it stops
             float gap = along - clear - (sideBySide ? 1f : followGap * shipDiameter);
-            float limit = Math.Max(0, otherAlong) + Math.Max(0, gap) / FOLLOW_TIME;
-            if (headOn) limit = Math.Max(0, gap + Math.Min(0, otherAlong) * FOLLOW_TIME * 2) / FOLLOW_TIME; // it comes towards me: stop early
+            float limit = Math.Max(0, otherAlong) + Math.Max(0, gap) / followTime;
+            if (headOn) limit = Math.Max(0, gap + Math.Min(0, otherAlong) * followTime * 2) / followTime; // it comes towards me: stop early
             Limit(limit, other, ref limiter);
             continue;
         }
@@ -441,11 +440,11 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             Vector3 rel = shipPosition - o.pos;
             float along = Vector3.Dot(rel, od);
             Vector3 lat = rel - od * along;
-            float clear = (shipDiameter + o.diameter) * 0.6f;
+            float clear = (TrafficDiameter() + o.diameter) * 0.6f;
             if (along <= 0 || along > clear * 4 || lat.Length() >= clear) continue;
             Vector3 away = lat.Length() > 0.5f ? Vector3.Normalize(lat) : Vector3.Normalize(Vector3.Cross(od, up));
             trafficShift = shipPosition + away * clear - navTargetPos; // fly to the point beside its line
-            trafficSpeedLimit = 2;
+            trafficSpeedLimit = moveAsideSpeed;
             sidestep = true;
             statusMessage = "Traffic: moving aside";
             return;
@@ -457,14 +456,31 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
     if (!held || precise || (limiter != null && limiter.queued && goingHome)) { trafficHolding = false; return; }
     if (!trafficHolding) { trafficHolding = true; trafficHoldSince = TimeNow(); }
     double heldFor = (TimeNow() - trafficHoldSince).TotalSeconds;
-    if (heldFor > TRAFFIC_STUCK_TIME + TRAFFIC_ESCAPE_TIME) trafficHoldSince = TimeNow();
-    else if (heldFor > TRAFFIC_STUCK_TIME) { trafficSpeedLimit = cpaClose ? 0 : -1; trafficShift = PassRight(dir, right, shipDiameter, shipDiameter * 4); statusMessage = "Traffic: passing a stuck ship"; }
+    if (heldFor > trafficStuckTime + trafficEscapeTime) trafficHoldSince = TimeNow();
+    else if (heldFor > trafficStuckTime) { float td = TrafficDiameter(); trafficSpeedLimit = cpaClose ? 0 : -1; trafficShift = PassRight(dir, right, td, td * 4); statusMessage = "Traffic: passing a stuck ship"; }
 }
 
 void Limit(float v, TrafficShip o, ref TrafficShip limiter) { if (trafficSpeedLimit < 0 || v < trafficSpeedLimit) { trafficSpeedLimit = v; limiter = o; } }
 
 // passing on the right: steer to a point beside the other ship where we meet it, not to the far
 // target with an offset (that would hardly move the ship sideways by the time they meet)
+// Ship size for traffic (what other ships and the controller see, and the clearances it keeps).
+// The broadcast position is the ship's reference point (centre of mass at setup), but shipDiameter is
+// the grid's bounding sphere around the middle of its box: on a lopsided ship the hull sticks out of a
+// sphere of that size around the reference point. trafficHullCover adds the offset between the two
+// centres so the sphere covers the whole hull; trafficPadding adds extra metres on every side.
+float TrafficDiameter()
+{
+    float d = shipDiameter;
+    if (trafficHullCover && remoteControl != null)
+    {
+        // middle of the grid's box (the minifier renames ".Center", so it is built from the corners)
+        IMyCubeGrid g = remoteControl.CubeGrid;
+        d += 2f * Vector3.Distance(shipPosition, (Vector3)((g.GridIntegerToWorld(g.Min) + g.GridIntegerToWorld(g.Max)) * 0.5));
+    }
+    return d + 2f * Math.Max(0f, trafficPadding);
+}
+
 Vector3 PassRight(Vector3 dir, Vector3 right, float clear, float along)
 {
     return dir * Math.Min((navTargetPos - shipPosition).Length(), Math.Max(along * 0.5f, clear)) + right * clear * 1.3f + shipPosition - navTargetPos;

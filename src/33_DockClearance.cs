@@ -206,7 +206,7 @@ void EmergencyLand()
     {
         Vector3 g = remoteControl.GetNaturalGravity();
         bool space = g.LengthSquared() < 0.01f;
-        SetFlightTarget(space ? emgStart : shipPosition + Vector3.Normalize(g) * 50, space ? 0 : 3);
+        SetFlightTarget(space ? emgStart : shipPosition + Vector3.Normalize(g) * 50, space ? 0 : emergencySpeed);
         statusMessage = "Emergency: landing";
         // on the ground: stopped for 2 s (not by traffic or the cameras), or a landing gear touches
         emgTicks++;

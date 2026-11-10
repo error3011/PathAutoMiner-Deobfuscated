@@ -8,7 +8,7 @@
 // can't jam. A station only answers ships whose home connector is on its own grid.
 
 const String DOCK_TAG = "[PAMDCK]";
-const float CLEARANCE_TIMEOUT = 120f; //[s] a cleared ship that doesn't finish loses its clearance
+// clearanceTimeout [s]: a cleared ship that doesn't finish loses its clearance
 
 class DockRequest
 {
@@ -241,7 +241,7 @@ void RunDockControl()
     DockRequest cleared = null;
     for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == clearedShip) cleared = dockRequests[i];
     if (clearedShip != 0 && cleared == null) clearedShip = 0;
-    if (cleared != null && (TimeNow() - clearedSince).TotalSeconds > CLEARANCE_TIMEOUT)
+    if (cleared != null && (TimeNow() - clearedSince).TotalSeconds > clearanceTimeout)
     { AddLog("Dock: " + ShipName(clearedShip) + " too slow, back of the queue"); clearedShip = 0; cleared.first = TimeNow(); } // too slow: back of the queue
     // ships on their last leg that stopped asking (docked, or gave up): done
     for (int i = dockingShips.Count - 1; i >= 0; i--)
@@ -250,9 +250,9 @@ void RunDockControl()
         for (int k = 0; k < dockRequests.Count; k++) if (dockRequests[k].ship == dockingShips[i]) asking = true;
         if (!asking) { dockingShips.RemoveAt(i); dockingConns.RemoveAt(i); }
     }
-    // lane blocks gone 3 s ago: connector usable again
+    // lane blocks gone laneClearTime (3 s) ago: connector usable again
     for (int i = laneBlocks.Count - 1; i >= 0; i--)
-        if ((TimeNow() - laneBlocks[i].last).TotalSeconds > 3)
+        if ((TimeNow() - laneBlocks[i].last).TotalSeconds > laneClearTime)
         {
             IMyShipConnector bc = StationConnector(laneBlocks[i].conn);
             AddLog("Dock: " + (bc != null ? bc.CustomName : "connector") + " lane clear again");

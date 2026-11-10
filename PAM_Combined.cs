@@ -18,10 +18,7 @@ const string VERSION = "1.3.1";
 const string DATAREV = "14";
 
 // ===== Settings =====
-// The settings are in this PB's Custom Data, in the [PAM settings] section (written with the
-// defaults on the first run; each script lists only the settings it uses). Edit them there, then
-// press Recompile. Delete a line to get its default back. They are kept when you paste a new
-// version of the script. Descriptions: README, section Settings.
+// In this PB's Custom Data, section [PAM settings], then Recompile. See README, Settings.
 
 // ===== End of settings: don't edit below this line =====
 
@@ -59,6 +56,22 @@ float obstacleTimeout = 10f;
 bool trafficEnabled = true;
 float laneOffset = 0.75f;
 float followGap = 1f;
+bool trafficHullCover = true;
+float trafficPadding = 0f;
+float trafficStuckTime = 15f;
+float trafficEscapeTime = 10f;
+float followTime = 2f;
+float trafficTimeout = 5f;
+int dockRetries = 3;
+float moveAsideSpeed = 2f;
+float emergencySpeed = 3f;
+float laneTurnTime = 8f;
+float holeStuckTime = 5f;
+float coopWaitHeight = 2.5f;
+float tccHorizon = 8f;
+float clearanceTimeout = 120f;
+float jobShipTimeout = 600f;
+float laneClearTime = 3f;
 bool resumeAfterRestart = true;
 const bool checkConveyorSystem = false; //temporarily disabled because of a SE bug
 bool debugDraw = false;
@@ -2107,12 +2120,12 @@ void UpdateNavigation()
                 if (!coopWaiting || (claimed == -2) != coopWaitAside)
                 {
                     coopWaiting = true; coopWaitAside = claimed == -2;
-                    // waiting spot: on a ring 2.5 ship sizes above the job centre, above everyone working
+                    // waiting spot: on a ring coopWaitHeight (2.5) ship sizes above the job centre, above everyone working
                     // or passing (always clear of terrain), each ship on its own place of the ring
                     int slot = 0; // rank among the ships on this job
                     for (int i = 0; i < traffic.Count; i++) if (traffic[i].job == JobKey() && traffic[i].id < myGridId) slot++;
                     double a = slot % 6 * Math.PI / 3;
-                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter * 2.5f +
+                    coopWaitPos = !coopWaitAside ? shipPosition : jobPosition.position - miningForward * shipDiameter * coopWaitHeight +
                         (jobPosition.leftDir * (float)Math.Cos(a) + miningDown * (float)Math.Sin(a)) * shipDiameter * 1.2f;
                 }
                 SetFlightTarget(coopWaitPos, 10);
@@ -2156,12 +2169,12 @@ void UpdateNavigation()
                 SetNavState(NavState.Mining);
                 return;
             }
-            // no progress for 5 s (not held by traffic or the cameras): over the hole, the ground is in
+            // no progress for holeStuckTime (5 s, not held by traffic or the cameras): over the hole, the ground is in
             // the way down (terrain above the job surface) -> start the hole here (Mining turns the drills on);
             // elsewhere a hill is in the way -> go over it, one ship size higher, then down
             if (shipSpeed < 0.3f && trafficSpeedLimit < 0 && !pathBlocked)
             {
-                if (++stuckCounter < 30) return;
+                if (++stuckCounter < holeStuckTime * 6) return;
                 stuckCounter = 1;
                 Vector3 off = miningTargetPos - shipPosition;
                 float along = Vector3.Dot(off, miningForward);
@@ -2539,7 +2552,7 @@ void UpdateNavigation()
         if (laneTurn)
         {
             statusMessage = "Docking: turning at the lane";
-            if (!isAligned && ++stuckCounter < 48) return; // at most 8 s (weak gyros, heavy cargo): then on anyway
+            if (!isAligned && ++stuckCounter < laneTurnTime * 6) return; // at most laneTurnTime (8 s) (weak gyros, heavy cargo): then on anyway
             laneTurn = false; statusMessage = "";
             GetDockApproachPosition(dock, dockDist * shipDiameter, true, out navTargetPos);
             SetFlightTarget(navTargetPos, 0);
@@ -2554,8 +2567,8 @@ void UpdateNavigation()
         if (detourShift.LengthSquared() > 0 && distToTarget < wpReachedDist && distToTarget != -1) { detourShift = new Vector3(); return; }
         if (distToTarget < wpReachedDist / 2 && distToTarget != -1)
         {
-            // the connector didn't lock 3 times: leave it, ask for another one
-            if (dockTries >= 3 && shipMode != ShipMode.Shuttle)
+            // the connector didn't lock dockRetries (3) times: leave it, ask for another one
+            if (dockTries >= dockRetries && shipMode != ShipMode.Shuttle)
             {
                 badDocks.Add(poolDock != null ? poolDockId : homeConnId); // keeps asking: the station drops that clearance, the ship keeps its place
                 dockTries = 0;
@@ -5782,8 +5795,8 @@ IMyCameraBlock CameraFor(Vector3 end)
 //    ships have or are too close to, and share which holes are finished
 
 const String TRAFFIC_TAG = "[PAMTFC]";
-const float TRAFFIC_TIMEOUT = 5f; //[s] forget ships not heard from for this long
-const float FOLLOW_TIME = 2f;     //[s] time to close the gap to a ship ahead
+// trafficTimeout [s]: forget ships not heard from for this long (stopped ships: at least 12 s)
+// followTime [s]: time to close the gap to a ship ahead
 
 class TrafficShip
 {
@@ -5812,8 +5825,7 @@ float trafficSpeedLimit = -1; // -1 = no limit
 Vector3 trafficHeading = new Vector3();
 bool trafficHolding = false;
 DateTime trafficHoldSince = TimeNow();
-const float TRAFFIC_STUCK_TIME = 15f;  //[s] held by traffic this long -> stop waiting and pass on the right
-const float TRAFFIC_ESCAPE_TIME = 10f; //[s] for this long
+// trafficStuckTime / trafficEscapeTime (settings): held by traffic this long -> stop waiting and pass on the right, for this long
 int trafficTick = 0;
 String doneHoles = "";        // one char per hole (grid cell): '1' = finished (by any co-op ship)
 int myHole = -1;              // grid cell of the hole this ship works on
@@ -5845,7 +5857,7 @@ void UpdateTraffic()
     }
     for (int i = traffic.Count - 1; i >= 0; i--)
         // stopped ships (docked, idle: they run and send less often) are kept longer
-        if ((TimeNow() - traffic[i].time).TotalSeconds > (traffic[i].vel.LengthSquared() < 0.25f ? 12 : TRAFFIC_TIMEOUT)) traffic.RemoveAt(i);
+        if ((TimeNow() - traffic[i].time).TotalSeconds > (traffic[i].vel.LengthSquared() < 0.25f ? Math.Max(12, trafficTimeout) : trafficTimeout)) traffic.RemoveAt(i);
     if (tccListener == null) tccListener = IGC.RegisterBroadcastListener(TCC_TAG);
     budget = 5;
     while (tccListener.HasPendingMessage && budget-- > 0)
@@ -5878,7 +5890,7 @@ void UpdateTraffic()
         debugRays.Clear();
     }
     IGC.SendBroadcastMessage(TRAFFIC_TAG, myGridId + ";" + VectorToString(shipPosition) + ";" +
-        VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + shipDiameter + ";" + JobKey() + ";" +
+        VectorToString(remoteControl.GetShipVelocities().LinearVelocity) + ";" + TrafficDiameter() + ";" + JobKey() + ";" +
         (jobState == JobState.Active ? myHole : -1) + ";" + doneHoles + ";" + ClaimedDockId() + "," + DockPhase() + ";" + VectorToString(trafficHeading) +
         ";" + (outOfService || emgStage == 1 || emgStage == 2 ? 2 : dockQueued ? 1 : 0) + ";" + (holeWanted && jobState == JobState.Active ? 1 : 0) + "," + shipFootWidth + "," + shipFootHeight + "," + JobFlag() + "," + (sentPrio = TrafficPrio()) + "," + (sentDest = (float)Math.Round(DestDist())) + ";" + Me.GetId() +
         // for the controller's screens: battery %, hydrogen %, uranium kg, emergency, flight state, run time ms, up (x10)
@@ -6127,7 +6139,7 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
         if (other.dockPhase == 3 && other.vel.LengthSquared() < 0.25f) continue; // parked at a connector
         Vector3 pos = other.pos + other.vel * (float)(TimeNow() - other.time).TotalSeconds;
         Vector3 rel = pos - shipPosition;
-        float clear = (shipDiameter + other.diameter) * 0.5f;
+        float clear = (TrafficDiameter() + other.diameter) * 0.5f;
         // two ships working the same job are aligned to it and drill different holes, so a ship at
         // another hole, even the next one, is never in the way: only closer than one hole spacing counts
         bool sameJob = other.job != "" && other.job == JobKey();
@@ -6179,8 +6191,8 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             }
             // same direction, or a ship that isn't moving on its own: follow at a distance, hold if it stops
             float gap = along - clear - (sideBySide ? 1f : followGap * shipDiameter);
-            float limit = Math.Max(0, otherAlong) + Math.Max(0, gap) / FOLLOW_TIME;
-            if (headOn) limit = Math.Max(0, gap + Math.Min(0, otherAlong) * FOLLOW_TIME * 2) / FOLLOW_TIME; // it comes towards me: stop early
+            float limit = Math.Max(0, otherAlong) + Math.Max(0, gap) / followTime;
+            if (headOn) limit = Math.Max(0, gap + Math.Min(0, otherAlong) * followTime * 2) / followTime; // it comes towards me: stop early
             Limit(limit, other, ref limiter);
             continue;
         }
@@ -6214,11 +6226,11 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
             Vector3 rel = shipPosition - o.pos;
             float along = Vector3.Dot(rel, od);
             Vector3 lat = rel - od * along;
-            float clear = (shipDiameter + o.diameter) * 0.6f;
+            float clear = (TrafficDiameter() + o.diameter) * 0.6f;
             if (along <= 0 || along > clear * 4 || lat.Length() >= clear) continue;
             Vector3 away = lat.Length() > 0.5f ? Vector3.Normalize(lat) : Vector3.Normalize(Vector3.Cross(od, up));
             trafficShift = shipPosition + away * clear - navTargetPos; // fly to the point beside its line
-            trafficSpeedLimit = 2;
+            trafficSpeedLimit = moveAsideSpeed;
             sidestep = true;
             statusMessage = "Traffic: moving aside";
             return;
@@ -6230,14 +6242,31 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
     if (!held || precise || (limiter != null && limiter.queued && goingHome)) { trafficHolding = false; return; }
     if (!trafficHolding) { trafficHolding = true; trafficHoldSince = TimeNow(); }
     double heldFor = (TimeNow() - trafficHoldSince).TotalSeconds;
-    if (heldFor > TRAFFIC_STUCK_TIME + TRAFFIC_ESCAPE_TIME) trafficHoldSince = TimeNow();
-    else if (heldFor > TRAFFIC_STUCK_TIME) { trafficSpeedLimit = cpaClose ? 0 : -1; trafficShift = PassRight(dir, right, shipDiameter, shipDiameter * 4); statusMessage = "Traffic: passing a stuck ship"; }
+    if (heldFor > trafficStuckTime + trafficEscapeTime) trafficHoldSince = TimeNow();
+    else if (heldFor > trafficStuckTime) { float td = TrafficDiameter(); trafficSpeedLimit = cpaClose ? 0 : -1; trafficShift = PassRight(dir, right, td, td * 4); statusMessage = "Traffic: passing a stuck ship"; }
 }
 
 void Limit(float v, TrafficShip o, ref TrafficShip limiter) { if (trafficSpeedLimit < 0 || v < trafficSpeedLimit) { trafficSpeedLimit = v; limiter = o; } }
 
 // passing on the right: steer to a point beside the other ship where we meet it, not to the far
 // target with an offset (that would hardly move the ship sideways by the time they meet)
+// Ship size for traffic (what other ships and the controller see, and the clearances it keeps).
+// The broadcast position is the ship's reference point (centre of mass at setup), but shipDiameter is
+// the grid's bounding sphere around the middle of its box: on a lopsided ship the hull sticks out of a
+// sphere of that size around the reference point. trafficHullCover adds the offset between the two
+// centres so the sphere covers the whole hull; trafficPadding adds extra metres on every side.
+float TrafficDiameter()
+{
+    float d = shipDiameter;
+    if (trafficHullCover && remoteControl != null)
+    {
+        // middle of the grid's box (the minifier renames ".Center", so it is built from the corners)
+        IMyCubeGrid g = remoteControl.CubeGrid;
+        d += 2f * Vector3.Distance(shipPosition, (Vector3)((g.GridIntegerToWorld(g.Min) + g.GridIntegerToWorld(g.Max)) * 0.5));
+    }
+    return d + 2f * Math.Max(0f, trafficPadding);
+}
+
 Vector3 PassRight(Vector3 dir, Vector3 right, float clear, float along)
 {
     return dir * Math.Min((navTargetPos - shipPosition).Length(), Math.Max(along * 0.5f, clear)) + right * clear * 1.3f + shipPosition - navTargetPos;
@@ -6599,7 +6628,7 @@ void DockPoolFromString(String s)
 // can't jam. A station only answers ships whose home connector is on its own grid.
 
 const String DOCK_TAG = "[PAMDCK]";
-const float CLEARANCE_TIMEOUT = 120f; //[s] a cleared ship that doesn't finish loses its clearance
+// clearanceTimeout [s]: a cleared ship that doesn't finish loses its clearance
 
 class DockRequest
 {
@@ -6832,7 +6861,7 @@ void RunDockControl()
     DockRequest cleared = null;
     for (int i = 0; i < dockRequests.Count; i++) if (dockRequests[i].ship == clearedShip) cleared = dockRequests[i];
     if (clearedShip != 0 && cleared == null) clearedShip = 0;
-    if (cleared != null && (TimeNow() - clearedSince).TotalSeconds > CLEARANCE_TIMEOUT)
+    if (cleared != null && (TimeNow() - clearedSince).TotalSeconds > clearanceTimeout)
     { AddLog("Dock: " + ShipName(clearedShip) + " too slow, back of the queue"); clearedShip = 0; cleared.first = TimeNow(); } // too slow: back of the queue
     // ships on their last leg that stopped asking (docked, or gave up): done
     for (int i = dockingShips.Count - 1; i >= 0; i--)
@@ -6841,9 +6870,9 @@ void RunDockControl()
         for (int k = 0; k < dockRequests.Count; k++) if (dockRequests[k].ship == dockingShips[i]) asking = true;
         if (!asking) { dockingShips.RemoveAt(i); dockingConns.RemoveAt(i); }
     }
-    // lane blocks gone 3 s ago: connector usable again
+    // lane blocks gone laneClearTime (3 s) ago: connector usable again
     for (int i = laneBlocks.Count - 1; i >= 0; i--)
-        if ((TimeNow() - laneBlocks[i].last).TotalSeconds > 3)
+        if ((TimeNow() - laneBlocks[i].last).TotalSeconds > laneClearTime)
         {
             IMyShipConnector bc = StationConnector(laneBlocks[i].conn);
             AddLog("Dock: " + (bc != null ? bc.CustomName : "connector") + " lane clear again");
@@ -7111,7 +7140,7 @@ void EmergencyLand()
     {
         Vector3 g = remoteControl.GetNaturalGravity();
         bool space = g.LengthSquared() < 0.01f;
-        SetFlightTarget(space ? emgStart : shipPosition + Vector3.Normalize(g) * 50, space ? 0 : 3);
+        SetFlightTarget(space ? emgStart : shipPosition + Vector3.Normalize(g) * 50, space ? 0 : emergencySpeed);
         statusMessage = "Emergency: landing";
         // on the ground: stopped for 2 s (not by traffic or the cameras), or a landing gear touches
         emgTicks++;
@@ -7143,9 +7172,8 @@ bool CheckUndockClearance()
 // The controller listens to the ships' traffic messages and keeps the master record of each co-op
 // job: finished holes and which ship has which hole. A ship that needs a hole sets a want flag;
 // the controller assigns the next free hole in the mining order and broadcasts the job state twice a second. Claims are kept while a ship is out of
-// range (e.g. unloading far away) and dropped after JOB_SHIP_TIMEOUT without a message.
+// range (e.g. unloading far away) and dropped after jobShipTimeout (600 s) without a message.
 
-const float JOB_SHIP_TIMEOUT = 600f; //[s]
 
 class JobShip
 {
@@ -7187,7 +7215,7 @@ void UpdateJobCoordination()
     {
         JobRec job = jobs[j];
         for (int i = job.ships.Count - 1; i >= 0; i--)
-            if ((TimeNow() - job.ships[i].seen).TotalSeconds > JOB_SHIP_TIMEOUT) job.ships.RemoveAt(i);
+            if ((TimeNow() - job.ships[i].seen).TotalSeconds > jobShipTimeout) job.ships.RemoveAt(i);
         if (job.ships.Count == 0) { jobs.RemoveAt(j); continue; }
         AssignJobHoles(job);
     }
@@ -7330,7 +7358,7 @@ String GetJobLines()
 // while the conflict lasts (unless a right of way changes), so it can't flip back and forth. Ships parked or
 // hovering without wanting to move are obstacles for the ships' own avoidance, not for this.
 
-const float TCC_HORIZON = 8f; //[s] how far ahead conflicts are predicted
+// tccHorizon [s]: how far ahead conflicts are predicted
 
 class TCShip
 {
@@ -7442,7 +7470,7 @@ void ComputeTrafficControl()
             float ru2 = ru.LengthSquared();
             float t = ru2 > 0.01f ? -Vector3.Dot(rel, ru) / ru2 : 0;
             bool tooClose = dist < clear;
-            if (!tooClose && (t <= 0 || t > TCC_HORIZON || (rel + ru * t).Length() >= clear)) continue;
+            if (!tooClose && (t <= 0 || t > tccHorizon || (rel + ru * t).Length() >= clear)) continue;
             // head-on: the ships pass each other on the right themselves (holding one would stop it from
             // stepping aside); the controller handles ships catching up and crossing paths
             if (!tooClose && a.prio == b.prio && ua.LengthSquared() > 0.25f && ub.LengthSquared() > 0.25f && Vector3.Dot(Vector3.Normalize(ua), Vector3.Normalize(ub)) < -0.7f)
@@ -7904,6 +7932,18 @@ void LoadShipSettings()
     obstacleTimeout = CF("obstacleTimeout", obstacleTimeout);
     laneOffset = CF("laneOffset", laneOffset);
     followGap = CF("followGap", followGap);
+    trafficHullCover = CB("trafficHullCover", trafficHullCover);
+    trafficPadding = CF("trafficPadding", trafficPadding);
+    trafficStuckTime = CF("trafficStuckTime", trafficStuckTime);
+    trafficEscapeTime = CF("trafficEscapeTime", trafficEscapeTime);
+    followTime = Math.Max(0.1f, CF("followTime", followTime));
+    trafficTimeout = CF("trafficTimeout", trafficTimeout);
+    dockRetries = Math.Max(1, (int)CF("dockRetries", dockRetries));
+    moveAsideSpeed = CF("moveAsideSpeed", moveAsideSpeed);
+    emergencySpeed = CF("emergencySpeed", emergencySpeed);
+    laneTurnTime = CF("laneTurnTime", laneTurnTime);
+    holeStuckTime = CF("holeStuckTime", holeStuckTime);
+    coopWaitHeight = CF("coopWaitHeight", coopWaitHeight);
     resumeAfterRestart = CB("resumeAfterRestart", resumeAfterRestart);
 }
 
@@ -7913,6 +7953,10 @@ void LoadControllerSettings()
     laneTag = CS("laneTag", laneTag);
     dockLaneLength = CF("dockLaneLength", dockLaneLength);
     lcdLineHeight = CF("lcdLineHeight", lcdLineHeight);
+    tccHorizon = CF("tccHorizon", tccHorizon);
+    clearanceTimeout = CF("clearanceTimeout", clearanceTimeout);
+    jobShipTimeout = CF("jobShipTimeout", jobShipTimeout);
+    laneClearTime = CF("laneClearTime", laneClearTime);
 }
 
 // the setting's value from Custom Data (or the default), written back to the section
