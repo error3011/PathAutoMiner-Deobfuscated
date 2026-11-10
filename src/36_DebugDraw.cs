@@ -103,11 +103,13 @@ void UpdateDebugDraw()
     if (++dbgTick % 3 != 0) return; // redraw ~2x a second (the drawings stay until removed)
 
     dbg.RemoveDraw();
+    // many ships with debugDraw on: everything below stops near the instruction limit instead of the
+    // script being stopped ("Script Too Complex"); the rest is drawn on the next redraw
     // recorded paths (ships sharing a path: drawn once)
     List<String> drawn = new List<String>();
     foreach (String ps in shipPaths.Values)
     {
-        if (ps == "" || drawn.Contains(ps)) continue;
+        if (ps == "" || drawn.Contains(ps) || Heavy()) continue;
         drawn.Add(ps);
         String[] pts = ps.Split(':');
         for (int k = 1; k < pts.Length; k++) dbg.Line(StringToVector(pts[k - 1]), StringToVector(pts[k]), Color.SkyBlue, 0.1f);
@@ -115,7 +117,7 @@ void UpdateDebugDraw()
         dbg.Label("Path end", StringToVector(pts[pts.Length - 1]), Color.SkyBlue);
     }
     // ships
-    for (int i = 0; i < tcShips.Count; i++)
+    for (int i = 0; i < tcShips.Count && !Heavy(); i++)
     {
         TCShip s = tcShips[i];
         Color c = TCParked(s) ? Color.Gray : s.limit >= 0 ? Color.Yellow : Color.Lime;
@@ -139,7 +141,8 @@ void UpdateDebugDraw()
         dbg.Label("Conflict: " + TCName(tcPairs[i].yielder == a.id ? a : b) + " gives way", (a.pos + b.pos) / 2, Color.Red);
     }
     // what the ships send: flight target, camera rays, hole grid
-    for (int i = 0; i < dbgShips.Count; i++)
+    drawn.Clear(); // jobs whose hole grid is drawn
+    for (int i = 0; i < dbgShips.Count && !Heavy(); i++)
     {
         DbgShip d = dbgShips[i];
         TCShip t = null;
@@ -152,7 +155,8 @@ void UpdateDebugDraw()
         if (job == null) continue;
         int doneCount = 0;
         for (int c = 0; c < job.done.Length; c++) if (job.done[c] == '1') doneCount++;
-        bool firstOfJob = i == 0 || dbgShips[i - 1].jobPos != d.jobPos;
+        bool firstOfJob = !drawn.Contains(job.key);
+        if (firstOfJob) drawn.Add(job.key);
         if (firstOfJob)
         {
             dbg.Label("Job: " + doneCount + "/" + job.done.Length + " holes done", d.jobPos, Color.White);
@@ -164,8 +168,11 @@ void UpdateDebugDraw()
             }
             dbg.Label("Waiting ring", d.jobPos - d.fwd * t.dia * 2.5f, Color.Violet);
         }
+        // the grid once per job; for the other ships only their own hole
+        JobShip own = job.ships.Find(q => q.id == d.id);
         for (int c = 0; c < job.done.Length; c++)
         {
+            if (!firstOfJob && (own == null || own.cell != c)) continue;
             int col = c % job.w, row = c / job.w;
             Vector3 p = d.jobPos + d.left * ((job.w - 1f) / 2f - col) * job.tw - d.down * ((job.h - 1f) / 2f - row) * job.th;
             JobShip owner = HoleOwner(job, c, null);

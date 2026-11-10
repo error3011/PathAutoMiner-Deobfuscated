@@ -254,11 +254,20 @@ void UpdateControllerDisplays()
 
     for (int i = 0; i < textSurfaces.Count; i++)
         DrawTextScreen(textSurfaces[i], BuildControllerScreenForMode(LCDMode.MainCompact, "0", false, LinesFor(textSurfaces[i])), LCDMode.MainCompact, LinesFor(textSurfaces[i]));
-    // drawn screens (map, job, log): one per run, in turn, every other tick: each about once a second with 3
-    int spriteNo = 0, spriteCount = 0;
-    foreach (IMyTextPanel q in lcdPanels) if (SpriteMode(ModeOf(q))) spriteCount++;
+    // drawn screens (map, job, log): one per run, in turn, every other tick: each about once a second with 3;
+    // the tiles of an LCD wall (map:<view>:<C>x<R>:<n>) together, so the picture doesn't tear between them
+    List<String> turns = new List<String>();
+    String[] keys = new String[lcdPanels.Count];
+    for (int i = 0; i < lcdPanels.Count; i++)
+    {
+        LCDMode m; String pr;
+        ParseLCDMode(lcdPanels[i], out m, out pr);
+        if (!SpriteMode(m)) continue;
+        keys[i] = m == LCDMode.Map && pr.Split(':').Length > 2 ? pr.Substring(0, pr.LastIndexOf(':')) : "" + lcdPanels[i].EntityId;
+        if (!turns.Contains(keys[i])) turns.Add(keys[i]);
+    }
     bool draw = isTick && ++screenTick % 2 == 0;
-    if (draw) spriteTurn = spriteCount > 0 ? (spriteTurn + 1) % spriteCount : 0;
+    if (draw) spriteTurn = turns.Count > 0 ? (spriteTurn + 1) % turns.Count : 0;
     for (int i = 0; i < lcdPanels.Count; i++)
     {
         LCDMode mode = LCDMode.Unknown;
@@ -266,7 +275,7 @@ void UpdateControllerDisplays()
         IMyTextPanel p = lcdPanels[i];
         ParseLCDMode(p, out mode, out param);
         lcdFontSet = ApplyLcdFont(p);
-        if (SpriteMode(mode)) { if (draw && spriteNo == spriteTurn) DrawSpriteScreen(p, mode, param); spriteNo++; continue; }
+        if (SpriteMode(mode)) { if (draw && turns.IndexOf(keys[i]) == spriteTurn && !Heavy()) DrawSpriteScreen(p, mode, param); continue; }
         int lines = LinesFor(p);
         DrawTextScreen(p, BuildControllerScreenForMode(mode, param, i == 0, lines), mode, lines); // coloured lines
     }
@@ -415,7 +424,7 @@ String GetLCDModeHelp(bool withDefault)
     text += "//Available modes:\n" + "//main:<Page>\n" + "//mainX:<Page>  (no empty lines)\n" + "//menu\n" +
         "//inventory\n" + "//menu:<shipname>\n" + "//inventory:<shipname>";
     // (the check for outdated Custom Data looks for the text above: new modes only in the template)
-    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (side view, wide LCD)\n//map:top  (top view)\n//map:dock  (docking area)\n//map:all  (all maps, big LCD: 3x3, 5x5)\n//docks" +
+    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (side view, wide LCD)\n//map:top  (top view)\n//map:dock  (docking area)\n//map:all  (all maps)\n//map:all:3x3:1  (tile 1 of a 3x3 wall of LCDs, sharp)\n//docks" +
         "\n\n//Font and size of this screen (remove the // to use):\n//font=Debug   (or Monospace, White, ...)\n//size=1.0";
     return text;
 }
@@ -443,7 +452,7 @@ void ParseLCDMode(IMyTerminalBlock panel, out LCDMode mode, out String param)
     String modeStr = ParseCustomDataValue(FindCustomDataLine(panel.CustomData.Split('\n'), "mode", ref ok)).ToUpper();
     String[] parts = modeStr.Split(':');
     String modeKey = parts.Length > 0 ? parts[0].Trim() : "";
-    param = parts.Length > 1 ? parts[1].Trim() : "";
+    param = parts.Length > 1 ? modeStr.Substring(modeStr.IndexOf(':') + 1).Trim() : ""; // the rest (map:all:3x3:1)
     mode = LCDMode.Unknown;
     if (modeKey == "MAIN") mode = LCDMode.MainPaged;
     else if (modeKey == "MAINX") mode = LCDMode.MainPagedCompact;
