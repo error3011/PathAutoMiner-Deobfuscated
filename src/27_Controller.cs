@@ -415,7 +415,7 @@ String GetLCDModeHelp(bool withDefault)
     text += "//Available modes:\n" + "//main:<Page>\n" + "//mainX:<Page>  (no empty lines)\n" + "//menu\n" +
         "//inventory\n" + "//menu:<shipname>\n" + "//inventory:<shipname>";
     // (the check for outdated Custom Data looks for the text above: new modes only in the template)
-    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)\n//docks" +
+    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (side view, wide LCD)\n//map:top  (top view)\n//map:dock  (docking area)\n//map:all  (all maps, big LCD: 3x3, 5x5)\n//docks" +
         "\n\n//Font and size of this screen (remove the // to use):\n//font=Debug   (or Monospace, White, ...)\n//size=1.0";
     return text;
 }

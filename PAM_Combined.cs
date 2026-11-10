@@ -5361,7 +5361,7 @@ String GetLCDModeHelp(bool withDefault)
     text += "//Available modes:\n" + "//main:<Page>\n" + "//mainX:<Page>  (no empty lines)\n" + "//menu\n" +
         "//inventory\n" + "//menu:<shipname>\n" + "//inventory:<shipname>";
     // (the check for outdated Custom Data looks for the text above: new modes only in the template)
-    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (wide LCD)\n//docks" +
+    if (withDefault) text += "\n//fleet\n//ship:<shipname>\n//log\n//job:<number>\n//map  (side view, wide LCD)\n//map:top  (top view)\n//map:dock  (docking area)\n//map:all  (all maps, big LCD: 3x3, 5x5)\n//docks" +
         "\n\n//Font and size of this screen (remove the // to use):\n//font=Debug   (or Monospace, White, ...)\n//size=1.0";
     return text;
 }
@@ -7999,7 +7999,7 @@ String SettingsBlock()
 //   log            coordination events (docking, holes, giving way, emergencies, contact), newest first,
 //                  coloured by kind (drawn; text size = the LCD's font size)
 //   job:<n>        hole matrix of job n (drawn, as seen behind a ship drilling it)
-//   map            side view base -> job: path, job site, ships (drawn; wide LCD recommended)
+//   map[:side|top|dock|all]  side view / top view / docking area / all three (drawn, see the maps below)
 //   docks          the station's connectors: free / cleared / docking / docked / BLOCKED lane / damaged
 // The drawn ones redraw about once a second.
 
@@ -8130,20 +8130,12 @@ Dictionary<IMyTextSurface, String> screenCache = new Dictionary<IMyTextSurface, 
 String BuildDocksScreen()
 {
     String text = "Connectors" + (dockAreaStatus != "" ? " | " + dockAreaStatus : "") + "\n";
-    List<IMyShipConnector> list = new List<IMyShipConnector>(stationDocks);
-    foreach (long h in homeConns) { IMyShipConnector hc = StationConnector(h); if (hc != null && !list.Contains(hc)) list.Add(hc); }
+    List<IMyShipConnector> list = DockList();
     if (list.Count == 0) return text + "(no [PAM-Dock] connectors, no ship asked yet)\n";
     foreach (IMyShipConnector c in list)
     {
-        LaneBlock b = LaneBlockOf(c.EntityId);
-        int d = dockingConns.IndexOf(c.EntityId);
-        String st = b != null ? "BLOCKED: " + b.what + " in its lane" : !c.IsFunctional ? "DAMAGED" : !c.Enabled ? "OFF" :
-            c.Status == MyShipConnectorStatus.Connected ? "docked: " + GridName(c.OtherConnector.CubeGrid) :
-            c.Status == MyShipConnectorStatus.Connectable ? "ready to lock" :
-            clearedShip != 0 && clearedKind == 1 && clearedConn == c.EntityId ? "cleared: " + ShipName(clearedShip) :
-            d >= 0 ? "docking: " + ShipName(dockingShips[d]) : "free";
         bool cam = laneCameras.Exists(q => Vector3D.Distance(q.GetPosition(), c.GetPosition()) <= 10);
-        text += c.CustomName + (homeConns.Contains(c.EntityId) ? " (home)" : "") + ": " + st + (cam ? "" : " | no lane camera") + "\n";
+        text += c.CustomName + (homeConns.Contains(c.EntityId) ? " (home)" : "") + ": " + DockSt(c) + (cam ? "" : " | no lane camera") + "\n";
     }
     return text;
 }
@@ -8303,7 +8295,7 @@ void DrawSpriteScreen(IMyTextPanel p, LCDMode mode, String param)
     drawFrame = p.DrawFrame();
     if (mode == LCDMode.Job) DrawJobMatrix(param, at, size);
     else if (mode == LCDMode.Log) DrawLog(p, at, size);
-    else DrawSideMap(at, size);
+    else { drawFrameSize = size; DrawMap(param, at, size); }
     drawFrame.Dispose();
 }
 
@@ -8337,98 +8329,306 @@ void DrawJobMatrix(String param, Vector2 at, Vector2 size)
     DText("grey done | orange: ship working (number) | blue free", at + new Vector2(size.X / 2, size.Y - 24), Color.Gray, 0.6f, TextAlignment.CENTER);
 }
 
+// ---- maps (mode=map:<view>) ----
+//   map / map:side  side view station -> job: real heights, labelled in metres (stretched at most 5x)
+//   map:top         top view, the way to the first job pointing up, scale bar; heights as labels
+//   map:dock        the docking area zoomed in: connectors (numbered, coloured by state), their lanes,
+//                   [PAM-Zone] boxes, blocked lanes, ships near the docks, a line from a cleared ship to its connector
+//   map:all         all three on one screen, for a big LCD (3x3, 5x5)
+// Markers and text scale with the view (its smaller side / 512 px) times the LCD's font size.
+Vector3 mO, mUp, mAlong, mRight;
+Vector2 mAt, mSize;
+float mK = 1, mFont = 1;
+List<List<Vector3>> mPaths = new List<List<Vector3>>();
+String mPathKey = "";
+
+void DrawMap(String view, Vector2 at, Vector2 size)
+{
+    mFont = drawScale;
+    // frame of all views: station, up (planet: away from its centre), the way to the first job
+    mO = Me.GetPosition();
+    mUp = new Vector3();
+    if (hasPlanet) mUp = mO - planetCenter;
+    else foreach (TCShip t in tcShips) mUp += t.up;
+    if (mUp.LengthSquared() < 0.01f) mUp = Me.WorldMatrix.Up;
+    mUp.Normalize();
+    // every recorded path once (ships sharing a path: drawn once), parsed again only when one changed
+    List<String> ps = shipPaths.Values.Distinct().ToList();
+    String key = String.Join(";", ps);
+    if (key != mPathKey)
+    {
+        mPathKey = key; mPaths.Clear();
+        foreach (String p in ps) { List<Vector3> l = new List<Vector3>(); foreach (String w in p.Split(':')) if (w != "") l.Add(StringToVector(w)); mPaths.Add(l); }
+    }
+    // towards the first job (else the path end farthest from the station, else the first ship)
+    Vector3 far = jobs.Count > 0 ? JobPos(jobs[0]) : mO;
+    if (far == mO) foreach (List<Vector3> l in mPaths) foreach (Vector3 v in l) if (Vector3.Distance(v, mO) > Vector3.Distance(far, mO)) far = v;
+    if (far == mO && tcShips.Count > 0) far = tcShips[0].pos;
+    mAlong = far - mO - mUp * Vector3.Dot(far - mO, mUp);
+    if (mAlong.LengthSquared() < 1) mAlong = Vector3.Cross(mUp, Me.WorldMatrix.Right);
+    mAlong.Normalize();
+    mRight = Vector3.Cross(mAlong, mUp);
+
+    if (view == "ALL")
+    {
+        // wide: top view left, docks and side view right; square (3x3, 5x5): top view and docks above, side view below
+        float w = size.X, h = size.Y * 0.93f;
+        bool wide = w > h * 1.4f;
+        Vector2 a = wide ? new Vector2(w / 2, h) : new Vector2(w * 0.62f, h * 0.66f);
+        MapView("TOP", at, a);
+        MapView("DOCK", at + new Vector2(a.X, 0), wide ? new Vector2(w / 2, h / 2) : new Vector2(w - a.X, a.Y));
+        MapView("SIDE", at + (wide ? new Vector2(w / 2, h / 2) : new Vector2(0, a.Y)), wide ? new Vector2(w / 2, h / 2) : new Vector2(w, h - a.Y));
+        mK = Math.Min(size.X, size.Y) / 1024; drawScale = mFont * mK;
+        MapKey(at + new Vector2(size.X / 2, h + 22 * mK), true);
+    }
+    else MapView(view == "TOP" || view == "DOCK" ? view : "SIDE", at, size);
+}
+
+void MapView(String view, Vector2 at, Vector2 size)
+{
+    mAt = at; mSize = size;
+    mK = Math.Min(size.X, size.Y) / 512; drawScale = mFont * mK;
+    bool all = size != drawFrameSize;
+    if (all) // frame around each view of map:all
+    {
+        Vector2 b = at + size;
+        Color f = new Color(60, 60, 60);
+        DLine(at, new Vector2(b.X, at.Y), f, 2); DLine(new Vector2(b.X, at.Y), b, f, 2); DLine(b, new Vector2(at.X, b.Y), f, 2); DLine(new Vector2(at.X, b.Y), at, f, 2);
+    }
+    if (view == "DOCK") DrawDockMap(at, size);
+    else if (view == "TOP") DrawTopMap(at, size);
+    else DrawSideMap(at, size);
+    if (!all) MapKey(at + new Vector2(size.X / 2, size.Y - 22 * mK), view == "DOCK");
+}
+
+Vector2 drawFrameSize;
+
+// colour key at the bottom of a view
+void MapKey(Vector2 at, bool docks)
+{
+    if (docks) at.Y -= 18 * mK;
+    DText("green moving | yellow giving way | violet waiting | grey parked | red emergency", at, Color.Gray, 0.5f, TextAlignment.CENTER);
+    if (docks) DText("docks: green free | grey docked | sky blue cleared, docking | red lane blocked | coral damaged", at + new Vector2(0, 18 * mK), Color.Gray, 0.5f, TextAlignment.CENTER);
+}
+
+float Ht(Vector3 v) { return hasPlanet ? Vector3.Distance(v, planetCenter) - Vector3.Distance(mO, planetCenter) : Vector3.Dot(v - mO, mUp); }
+String HtS(Vector3 v) { float h = Ht(v); return (h >= 0 ? "+" : "") + Math.Round(h) + " m"; }
+
+Color ShipCol(TCShip t) { return t.emg ? Color.Red : t.limit >= 0 ? Color.Yellow : t.prio < 0 ? Color.Violet : TCParked(t) ? Color.Gray : Color.Lime; }
+
+// the connector a ship is cleared to / docking at (null: none)
+IMyShipConnector ShipDock(long id)
+{
+    int d = dockingShips.IndexOf(id);
+    return StationConnector(id == clearedShip && clearedKind == 1 ? clearedConn : d >= 0 ? dockingConns[d] : 0);
+}
+
+// a ship: arrow the way it flies (or wants to), a line to its connector when cleared (else where it is
+// in 5 s), its name and height
+void DShip(TCShip t, Func<Vector3, Vector2> P)
+{
+    Vector2 q = P(t.pos), d = P(t.pos + (t.vel.LengthSquared() > 0.25f ? t.vel : t.heading)) - q;
+    if (q.X < mAt.X || q.Y < mAt.Y || q.X > mAt.X + mSize.X || q.Y > mAt.Y + mSize.Y) return;
+    Color c = ShipCol(t);
+    IMyShipConnector sc = ShipDock(t.id);
+    if (sc != null) DLine(q, P(sc.GetPosition()), Color.SkyBlue, 2 * mK);
+    else if (t.vel.LengthSquared() > 0.25f) DLine(q, P(t.pos + t.vel * 5), c, 2 * mK);
+    if (d.LengthSquared() > 0.01f) drawFrame.Add(new MySprite(SpriteType.TEXTURE, "Triangle", q, new Vector2(14, 16) * mK, c, null, TextAlignment.CENTER, (float)Math.Atan2(d.X, -d.Y)));
+    else DBox(q, new Vector2(12, 12) * mK, c, "Circle");
+    DText(TCName(t) + " " + HtS(t.pos), q - new Vector2(0, 28 * mK), c, 0.55f, TextAlignment.CENTER);
+}
+
+// recorded paths (fewer segments when they'd be shorter than ~3 px)
+void DPaths(Func<Vector3, Vector2> P)
+{
+    foreach (List<Vector3> l in mPaths)
+    {
+        Vector2 last = new Vector2();
+        for (int i = 0; i < l.Count; i++)
+        {
+            Vector2 q = P(l[i]);
+            if (i > 0 && (q - last).Length() < 3 && i < l.Count - 1) continue;
+            if (i > 0) DLine(last, q, Color.SkyBlue, 2 * mK);
+            last = q;
+        }
+    }
+}
+
+// the station's connectors (pool + ships' homes)
+List<IMyShipConnector> DockList()
+{
+    List<IMyShipConnector> list = new List<IMyShipConnector>(stationDocks);
+    foreach (long h in homeConns) { IMyShipConnector hc = StationConnector(h); if (hc != null && !list.Contains(hc)) list.Add(hc); }
+    return list;
+}
+
+String DockSt(IMyShipConnector c)
+{
+    LaneBlock b = LaneBlockOf(c.EntityId);
+    int d = dockingConns.IndexOf(c.EntityId);
+    return b != null ? "BLOCKED: " + b.what + " in its lane" : !c.IsFunctional ? "DAMAGED" : !c.Enabled ? "OFF" :
+        c.Status == MyShipConnectorStatus.Connected ? "docked: " + GridName(c.OtherConnector.CubeGrid) :
+        c.Status == MyShipConnectorStatus.Connectable ? "ready to lock" :
+        clearedShip != 0 && clearedKind == 1 && clearedConn == c.EntityId ? "cleared: " + ShipName(clearedShip) :
+        d >= 0 ? "docking: " + ShipName(dockingShips[d]) : "free";
+}
+
+Color DockCol(IMyShipConnector c) { return LineColor(": " + DockSt(c), LCDMode.Docks, Color.White); }
+
+// grid lines / scale bar step: 1, 2, 5 x 10^n m, about n of them over range metres
+float MapStep(float range, int n) { float s = 1; while (range / s > n) s *= s.ToString().StartsWith("2") ? 2.5f : 2; return s; }
+
 // side view: horizontal = distance from the station towards the job, vertical = real height above the
-// station (on a planet: distance from its centre, so the curve of the planet doesn't tilt it), labelled
-// in metres; heights stretched at most 5x to stay readable
+// station (on a planet: distance from its centre, so the curve of the planet doesn't tilt it)
 void DrawSideMap(Vector2 at, Vector2 size)
 {
-    Vector3 o = Me.GetPosition();
-    Vector3 up = new Vector3();
-    if (hasPlanet) up = o - planetCenter;
-    else for (int i = 0; i < tcShips.Count; i++) up += tcShips[i].up;
-    if (up.LengthSquared() < 0.01f) up = Me.WorldMatrix.Up;
-    up.Normalize();
-    float rO = Vector3.Distance(o, planetCenter);
-    Func<Vector3, float> H = v => hasPlanet ? Vector3.Distance(v, planetCenter) - rO : Vector3.Dot(v - o, up);
-    // towards the first job (else the far end of a path, else the first ship)
-    Vector3 far = o;
-    if (jobs.Count > 0) far = JobPos(jobs[0]);
-    // the recorded path, parsed again only when it changed
-    String first = "";
-    foreach (String ps in shipPaths.Values) { first = ps; break; }
-    if (first != mapPathStr) { mapPathStr = first; mapPath.Clear(); foreach (String w in first.Split(':')) if (w != "") mapPath.Add(StringToVector(w)); }
-    List<Vector3> pts = mapPath;
-    if (far == o && pts.Count > 0) far = Vector3.Distance(pts[0], o) > Vector3.Distance(pts[pts.Count - 1], o) ? pts[0] : pts[pts.Count - 1];
-    if (far == o && tcShips.Count > 0) far = tcShips[0].pos;
-    Vector3 along = far - o - up * Vector3.Dot(far - o, up);
-    if (along.LengthSquared() < 1) along = Vector3.Cross(up, Me.WorldMatrix.Right);
-    along.Normalize();
-    // bounds
     float x0 = 0, x1 = 20, y0 = 0, y1 = 10;
-    List<Vector3> all = new List<Vector3>(pts);
-    all.Add(far);
-    for (int i = 0; i < tcShips.Count; i++) all.Add(tcShips[i].pos);
-    for (int i = 0; i < all.Count; i++)
+    List<Vector3> all = new List<Vector3>();
+    foreach (List<Vector3> l in mPaths) all.AddRange(l);
+    foreach (JobRec j in jobs) all.Add(JobPos(j));
+    foreach (TCShip t in tcShips) all.Add(t.pos);
+    foreach (Vector3 v in all)
     {
-        float x = Vector3.Dot(all[i] - o, along), y = H(all[i]);
+        float x = Vector3.Dot(v - mO, mAlong), y = Ht(v);
         x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y);
     }
     float mx = (x1 - x0) * 0.06f + 5, my = (y1 - y0) * 0.15f + 5;
     x0 -= mx; x1 += mx; y0 -= my; y1 += my;
-    float top = 30, bottom = 26, left = 52;
+    float top = 30 * mK, bottom = 40 * mK, left = 52 * mK;
     Vector2 area = new Vector2(size.X - left, size.Y - top - bottom);
-    float sx = area.X / (x1 - x0), sy = Math.Min(area.Y / (y1 - y0), sx * 5);
-    float yMid = (y0 + y1) / 2;
+    float sx = area.X / (x1 - x0), sy = Math.Min(area.Y / (y1 - y0), sx * 5), yMid = (y0 + y1) / 2;
     Func<float, float, Vector2> P2 = (x, y) => at + new Vector2(left + (x - x0) * sx, top + area.Y / 2 - (y - yMid) * sy);
-    Func<Vector3, Vector2> P = v => P2(Vector3.Dot(v - o, along), H(v));
+    Func<Vector3, Vector2> P = v => P2(Vector3.Dot(v - mO, mAlong), Ht(v));
 
-    DText("Side view: station -> job | heights x" + Math.Round(sy / sx, 1), at + new Vector2(size.X / 2, 4), Color.White, 0.7f, TextAlignment.CENTER);
+    DText("Side view: station -> job | heights x" + Math.Round(sy / sx, 1), at + new Vector2(size.X / 2, 4 * mK), Color.White, 0.7f, TextAlignment.CENTER);
     // height lines every 1/2/5 x 10^n m, labelled (height above the station)
-    float range = area.Y / sy, step = 1;
-    while (range / step > 6) step *= step.ToString().StartsWith("2") ? 2.5f : 2;
+    float range = area.Y / sy, step = MapStep(range, 6);
     for (float h = (float)Math.Ceiling((yMid - range / 2) / step) * step; h <= yMid + range / 2; h += step)
     {
         Vector2 a = P2(x0, h);
         if (a.Y < at.Y + top || a.Y > at.Y + size.Y - bottom) continue;
-        DLine(a, P2(x1, h), h == 0 ? new Color(70, 70, 70) : new Color(35, 35, 35), 1);
-        DText((h > 0 ? "+" : "") + h + " m", new Vector2(at.X + 2, a.Y - 9), Color.Gray, 0.5f, TextAlignment.LEFT);
+        DLine(a, P2(x1, h), h == 0 ? new Color(70, 70, 70) : new Color(35, 35, 35), mK);
+        DText((h > 0 ? "+" : "") + h + " m", new Vector2(at.X + 2, a.Y - 9 * mK), Color.Gray, 0.5f, TextAlignment.LEFT);
     }
-    // path (fewer segments when they'd be shorter than ~3 px)
-    Vector2 last = new Vector2();
-    for (int i = 0; i < pts.Count; i++)
-    {
-        Vector2 q = P(pts[i]);
-        if (i > 0 && (q - last).Length() < 3 && i < pts.Count - 1) continue;
-        if (i > 0) DLine(last, q, Color.SkyBlue, 2);
-        last = q;
-    }
-    // station, job sites (with their height)
-    DBox(P(o), new Vector2(14, 14), Color.White, "SquareSimple");
-    DText("Station", P(o) + new Vector2(0, 10), Color.White, 0.6f, TextAlignment.CENTER);
+    DPaths(P);
+    // station: its connectors coloured by state (above each other at their heights)
+    DText("Station", P(mO) + new Vector2(0, 10 * mK), Color.White, 0.6f, TextAlignment.CENTER);
+    List<IMyShipConnector> docks = DockList();
+    if (docks.Count == 0) DBox(P(mO), new Vector2(14, 14) * mK, Color.White, "SquareSimple");
+    foreach (IMyShipConnector c in docks) DBox(P(c.GetPosition()), new Vector2(8, 8) * mK, DockCol(c), "SquareSimple");
     for (int j = 0; j < jobs.Count; j++)
     {
         Vector3 jp = JobPos(jobs[j]);
-        int n = 0;
-        for (int i = 0; i < jobs[j].done.Length; i++) if (jobs[j].done[i] == '1') n++;
-        float half = jobs[j].w * jobs[j].tw / 2, jh = H(jp);
-        DLine(P(jp) - new Vector2(half * sx, 0), P(jp) + new Vector2(half * sx, 0), Color.Orange, 4);
-        DText("Job " + (j + 1) + " " + n + "/" + jobs[j].done.Length + " " + (jh >= 0 ? "+" : "") + Math.Round(jh) + " m", P(jp) + new Vector2(0, 6), Color.Orange, 0.6f, TextAlignment.CENTER);
+        float half = jobs[j].w * jobs[j].tw / 2;
+        DLine(P(jp) - new Vector2(half * sx, 0), P(jp) + new Vector2(half * sx, 0), Color.Orange, 4 * mK);
+        DText(JobLabel(j) + " " + HtS(jp), P(jp) + new Vector2(0, 6 * mK), Color.Orange, 0.6f, TextAlignment.CENTER);
     }
-    // ships: colour by what they do, a line where they're heading, height
-    for (int i = 0; i < tcShips.Count; i++)
-    {
-        TCShip t = tcShips[i];
-        Color c = t.emg ? Color.Red : t.limit >= 0 ? Color.Yellow : t.prio < 0 ? Color.Violet : TCParked(t) ? Color.Gray : Color.Lime;
-        Vector2 q = P(t.pos);
-        if (t.vel.LengthSquared() > 0.25f) DLine(q, P(t.pos + t.vel * 5), c, 2);
-        DBox(q, new Vector2(12, 12), c, "Circle");
-        float th = H(t.pos);
-        DText(TCName(t) + " " + (th >= 0 ? "+" : "") + Math.Round(th) + " m", q - new Vector2(0, 26), c, 0.55f, TextAlignment.CENTER);
-    }
-    DText("green moving | yellow giving way | violet waiting | grey parked | red emergency", at + new Vector2(size.X / 2, size.Y - 22), Color.Gray, 0.5f, TextAlignment.CENTER);
+    foreach (TCShip t in tcShips) DShip(t, P);
 }
 
-String mapPathStr = "";
-List<Vector3> mapPath = new List<Vector3>();
+String JobLabel(int j)
+{
+    int n = 0;
+    foreach (char c in jobs[j].done) if (c == '1') n++;
+    return "Job " + (j + 1) + " " + n + "/" + jobs[j].done.Length;
+}
+
+// a top-down view of the points (equal scale both ways, the way to the job up); returns the projection
+Func<Vector3, Vector2> TopFrame(List<Vector3> pts, Vector2 at, Vector2 size, float top, float bottom, float minRange, out float s)
+{
+    float x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+    foreach (Vector3 v in pts)
+    {
+        float x = Vector3.Dot(v - mO, mRight), y = Vector3.Dot(v - mO, mAlong);
+        x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y);
+    }
+    float m = Math.Max(Math.Max(x1 - x0, y1 - y0) * 0.08f, minRange), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    Vector2 area = new Vector2(size.X, size.Y - top - bottom), ctr = at + new Vector2(size.X / 2, top + area.Y / 2);
+    float sc = Math.Min(area.X / (x1 - x0 + 2 * m), area.Y / (y1 - y0 + 2 * m));
+    s = sc;
+    return v => ctr + new Vector2(Vector3.Dot(v - mO, mRight) - cx, cy - Vector3.Dot(v - mO, mAlong)) * sc;
+}
+
+// scale bar (top right of a view)
+void ScaleBar(Vector2 at, Vector2 size, float s)
+{
+    float st = MapStep(size.X / 4 / s, 1);
+    Vector2 b = at + new Vector2(size.X - 10 * mK, 14 * mK), a = b - new Vector2(st * s, 0);
+    DLine(a, b, Color.Gray, 2 * mK);
+    DText(st >= 1000 ? st / 1000 + " km" : st + " m", a - new Vector2(4 * mK, 9 * mK), Color.Gray, 0.5f, TextAlignment.RIGHT);
+}
+
+// top view: path, job sites (their size, with progress and height), station connectors, ships
+void DrawTopMap(Vector2 at, Vector2 size)
+{
+    List<Vector3> pts = new List<Vector3>();
+    foreach (List<Vector3> l in mPaths) pts.AddRange(l);
+    foreach (JobRec j in jobs) pts.Add(JobPos(j));
+    foreach (TCShip t in tcShips) pts.Add(t.pos);
+    float s;
+    Func<Vector3, Vector2> P = TopFrame(pts, at, size, 30 * mK, 30 * mK, 10, out s);
+    DText("Top view: station -> job (up)", at + new Vector2(10 * mK, 4 * mK), Color.White, 0.7f, TextAlignment.LEFT);
+    ScaleBar(at, size, s);
+    DPaths(P);
+    for (int j = 0; j < jobs.Count; j++)
+    {
+        Vector2 q = P(JobPos(jobs[j]));
+        DBox(q, Vector2.Max(new Vector2(jobs[j].w * jobs[j].tw, jobs[j].h * jobs[j].th) * s, new Vector2(10, 10) * mK), Color.Orange, "SquareHollow");
+        DText(JobLabel(j) + " " + HtS(JobPos(jobs[j])), q + new Vector2(0, 10 * mK), Color.Orange, 0.6f, TextAlignment.CENTER);
+    }
+    List<IMyShipConnector> docks = DockList();
+    DBox(P(mO), new Vector2(16, 16) * mK, Color.White, "SquareHollow");
+    foreach (IMyShipConnector c in docks) DBox(P(c.GetPosition()), new Vector2(6, 6) * mK, DockCol(c), "SquareSimple");
+    DText("Station", P(mO) + new Vector2(0, 10 * mK), Color.White, 0.6f, TextAlignment.CENTER);
+    foreach (TCShip t in tcShips) DShip(t, P);
+}
+
+// docking area zoomed in: [PAM-Zone] boxes, connectors with their lanes (dockLaneLength), blocked
+// lanes from the camera to what is in them, ships near the docks or in the dock queue
+void DrawDockMap(Vector2 at, Vector2 size)
+{
+    List<IMyShipConnector> docks = DockList();
+    DText("Dock area" + (dockAreaStatus != "" ? ": " + dockAreaStatus : ""), at + new Vector2(10 * mK, 4 * mK), Color.White, 0.6f, TextAlignment.LEFT);
+    if (docks.Count == 0) { DText("No [PAM-Dock] connectors, no ship asked yet", at + size / 2, Color.Gray, 0.6f, TextAlignment.CENTER); return; }
+    List<Vector3> pts = new List<Vector3>(), box = new List<Vector3>();
+    foreach (IMyShipConnector c in docks) { pts.Add(c.GetPosition()); pts.Add(c.GetPosition() + c.WorldMatrix.Forward * dockLaneLength); }
+    foreach (IMySensorBlock z in zoneSensors)
+    {
+        MatrixD m = z.WorldMatrix;
+        for (int i = 0; i < 8; i++)
+            box.Add(m.Translation + (i % 2 == 0 ? m.Left * z.LeftExtend : m.Right * z.RightExtend) + (i / 2 % 2 == 0 ? m.Up * z.TopExtend : m.Down * z.BottomExtend) +
+                (i / 4 == 0 ? m.Forward * z.FrontExtend : m.Backward * z.BackExtend));
+    }
+    pts.AddRange(box);
+    // ships in the queue, cleared or docking, or within the area so far
+    float r = 0;
+    foreach (Vector3 v in pts) r = Math.Max(r, Vector3.Distance(v, mO));
+    foreach (TCShip t in tcShips)
+        if (t.flag == 1 || ShipDock(t.id) != null || t.id == clearedShip || Vector3.Distance(t.pos, mO) < r * 1.5f) pts.Add(t.pos);
+    int lines = (docks.Count + 1) / 2;
+    float s, bottom = (58 + 16 * lines) * mK;
+    Func<Vector3, Vector2> P = TopFrame(pts, at, size, 30 * mK, bottom, 5, out s);
+    ScaleBar(at, size, s);
+    // zone boxes (all 12 edges, seen from above)
+    for (int k = 0; k < box.Count; k += 8)
+        for (int i = 0; i < 8; i++)
+            for (int b = 1; b < 8; b <<= 1)
+                if ((i & b) == 0) DLine(P(box[k + i]), P(box[k + (i | b)]), Color.Violet, mK);
+    for (int i = 0; i < docks.Count; i++)
+    {
+        IMyShipConnector c = docks[i];
+        Color col = DockCol(c);
+        Vector2 q = P(c.GetPosition());
+        DLine(q, P(c.GetPosition() + c.WorldMatrix.Forward * dockLaneLength), new Color(col.R / 3, col.G / 3, col.B / 3), 6 * mK);
+        DBox(q, new Vector2(12, 12) * mK, col, "SquareSimple");
+        DText("" + (i + 1), q + new Vector2(0, 6 * mK), col, 0.5f, TextAlignment.CENTER);
+        LaneBlock lb = LaneBlockOf(c.EntityId);
+        if (lb != null) { DLine(P(lb.cam), P(lb.hit), Color.Red, 2 * mK); DText(lb.what, P(lb.hit), Color.Red, 0.5f, TextAlignment.LEFT); }
+        // key under the map: number, name, state (2 per line)
+        DText((i + 1) + " " + c.CustomName.Replace(dockPoolTag, "").Trim() + ": " + DockSt(c),
+            at + new Vector2(10 * mK + i % 2 * size.X / 2, size.Y - bottom + (10 + i / 2 * 16) * mK), col, 0.5f, TextAlignment.LEFT);
+    }
+    foreach (TCShip t in tcShips) DShip(t, P);
+}
 
 Vector3 JobPos(JobRec job) { String[] k = job.key.Split('|'); return new Vector3(float.Parse(k[0]), float.Parse(k[1]), float.Parse(k[2])); }
