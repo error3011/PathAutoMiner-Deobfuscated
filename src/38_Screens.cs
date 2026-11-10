@@ -193,7 +193,7 @@ Color LineColor(String l, LCDMode mode, Color def)
 void DrawTextScreen(IMyTextSurface p, String text, LCDMode mode, int lines)
 {
     String font = mode == LCDMode.Fleet && !lcdFontSet ? "Monospace" : p.Font; // table columns (unless font= is set)
-    String key = text + p.FontSize + font + p.FontColor + p.BackgroundColor + p.TextPadding, old;
+    String key = text + p.FontSize + font + p.FontColor + p.BackgroundColor + p.TextPadding + screenTick / 30, old; // redrawn every ~5 s anyway (see NewFrame)
     if (screenCache.TryGetValue(p, out old) && old == key && p.ContentType == ContentType.SCRIPT) return;
     screenCache[p] = key;
     if (p.ContentType != ContentType.SCRIPT) { p.ContentType = ContentType.SCRIPT; p.Script = ""; }
@@ -201,7 +201,7 @@ void DrawTextScreen(IMyTextSurface p, String text, LCDMode mode, int lines)
     Vector2 size = p.SurfaceSize, at = (p.TextureSize - size) / 2;
     float sc = Math.Max(0.1f, p.FontSize), pad = size.Y * p.TextPadding / 100f;
     float lh = Math.Min(p.MeasureStringInPixels(new StringBuilder("Ag"), font, sc).Y, (size.Y - 2 * pad) / Math.Max(1, lines));
-    drawFrame = p.DrawFrame();
+    drawFrame = NewFrame(p);
     String[] ls = text.Split('\n');
     float y = at.Y + pad;
     for (int i = 0; i < ls.Length && y + lh <= at.Y + size.Y - pad + 1; i++, y += lh)
@@ -260,6 +260,18 @@ void DrawLog(IMyTextPanel p, Vector2 at, Vector2 size)
 // ---- drawing ----
 MySpriteDrawFrame drawFrame;
 
+// Multiplayer: the server sends a screen's sprites to the players as changes against the last frame; a
+// sprite a player missed stays wrong (old lines left on the screen next to the new ones). An empty sprite
+// at the front of every other frame shifts all of them, so each player gets the whole frame again
+// (Keen's suggested workaround); screens are also redrawn every ~5 s even when nothing changed.
+bool spriteFlip;
+MySpriteDrawFrame NewFrame(IMyTextSurface p)
+{
+    MySpriteDrawFrame f = p.DrawFrame();
+    if (spriteFlip = !spriteFlip) f.Add(new MySprite());
+    return f;
+}
+
 void DLine(Vector2 a, Vector2 b, Color c, float w)
 {
     Vector2 d = b - a;
@@ -294,7 +306,7 @@ void DrawSpriteScreen(IMyTextPanel p, LCDMode mode, String param)
     }
     if (key != null)
     {
-        key += p.FontSize + p.Font + p.BackgroundColor + p.SurfaceSize;
+        key += p.FontSize + p.Font + p.BackgroundColor + p.SurfaceSize + screenTick / 30;
         String old;
         if (screenCache.TryGetValue(p, out old) && old == key && p.ContentType == ContentType.SCRIPT) return;
         screenCache[p] = key;
@@ -303,7 +315,7 @@ void DrawSpriteScreen(IMyTextPanel p, LCDMode mode, String param)
     p.ScriptBackgroundColor = new Color(0, 0, 0);
     Vector2 size = p.SurfaceSize, at = (p.TextureSize - size) / 2;
     drawScale = p.FontSize; drawFont = p.Font;
-    drawFrame = p.DrawFrame();
+    drawFrame = NewFrame(p);
     if (mode == LCDMode.Job) DrawJobMatrix(param, at, size);
     else if (mode == LCDMode.Log) DrawLog(p, at, size);
     else DrawMap(param, at, size);
