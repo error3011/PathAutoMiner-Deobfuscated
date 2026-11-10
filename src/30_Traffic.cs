@@ -297,8 +297,10 @@ void UpdateTrafficAvoidance()
     trafficShift = new Vector3();
     trafficSpeedLimit = -1;
     trafficHeading = new Vector3();
-    // in a connector's lane (pool connector too): precise, holds only (no side steps, no moving aside)
-    bool free = IsFreeFlightState(currentNavState) && !(currentNavState == NavState.ApproachDock && !toLane);
+    // in a connector's lane (pool connector too): precise, holds only (no side steps, no moving aside).
+    // Out of its hole, rising above the job to leave for home: free flight again, so a ship waiting or
+    // stuck in the way is passed, and it doesn't hold there for ever (an emergency stood still)
+    bool free = (IsFreeFlightState(currentNavState) || currentNavState == NavState.ReturnToDock && exitRise) && !(currentNavState == NavState.ApproachDock && !toLane);
     if (!trafficEnabled || (!free && !IsPreciseFlightState(currentNavState))) { trafficHolding = false; return; }
     trafficMyVel = remoteControl.GetShipVelocities().LinearVelocity;
     ComputeTrafficAvoidance(remoteControl.GetNaturalGravity(), !free);
