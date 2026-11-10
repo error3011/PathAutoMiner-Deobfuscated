@@ -4,6 +4,18 @@ Deobfuscated and modular source code for **[PAM] Path Auto Miner v1.3.1** by Kek
 
 The original script is published as a single minified/obfuscated file. This project restores it into readable, well-structured C# source files that can be modified, rebuilt, and re-minified for use in Space Engineers programmable blocks.
 
+## Contents
+
+- [Building](#building)
+- [Which file to paste](#which-file-to-paste)
+- [Setup in Space Engineers](#setup-in-space-engineers)
+- [Run arguments](#run-arguments)
+- [Configuration](#configuration): [menu](#menu-settings-job-and-behaviour), [Custom Data](#pb-custom-data), [settings reference](#settings-reference), [tuning tips](#tuning-tips)
+- [How it works (flowcharts)](#how-it-works-flowcharts)
+- [Multiple ships: obstacle brake, traffic and co-op mining](#multiple-ships-obstacle-brake-traffic-and-co-op-mining)
+- [Controller screens](#controller-screens)
+- [Changes from the original 1.3.1](#changes-from-the-original-131)
+
 ## Original Script
 
 - **Author:** Keks
@@ -93,15 +105,91 @@ python tools/build_pam.py --minify
 
 This writes `PAM_Combined.cs`, `PAM_Minified.cs`, `PAM_Ship.cs` and `PAM_Controller.cs`, and reports how many characters each script has left under the limit.
 
-## Usage in Space Engineers
+## Which file to paste
 
-1. Build the project (see above)
-2. Open `PAM_Ship.cs` (ships) or `PAM_Controller.cs` (controller) and copy all contents
-3. In Space Engineers, open a Programmable Block
-4. Paste the script and click "Check code" then "Remember & Exit"
-5. Use the PAM interface on LCD panels tagged with `[PAM]`
+The programmable block limit is 100,000 characters, and one script with both the ship logic and the controller logic no longer leaves room for new features. So the build writes two scripts:
 
-For full usage instructions, see the [official PAM guide](https://steamcommunity.com/sharedfiles/filedetails/?id=1553126390).
+- **`PAM_Ship.cs`** for miners, grinders and shuttles
+- **`PAM_Controller.cs`** for the `[PAM-Controller]` PB
+
+Pasting the wrong one is harmless: the PB just says which file it needs. `PAM_Minified.cs` (both modes in one script) no longer fits under the limit and is only kept as a build check.
+
+## Setup in Space Engineers
+
+### 1. Paste the script
+
+1. Build the project (see above), or use the `PAM_Ship.cs` / `PAM_Controller.cs` already in the repository.
+2. Open the file for the PB you are setting up (see [Which file to paste](#which-file-to-paste)) and copy all of it.
+3. In the game, open the programmable block, **Edit**, paste, **Check code**, then close the editor and keep the code.
+4. The script runs itself every 10 game ticks (6 times a second). It needs no timer block.
+
+On the first run the script fills the PB's Custom Data (see [Configuration](#configuration)) and decides the ship's mode:
+
+- PB name contains `[PAM-Controller]` → **controller** (station).
+- Otherwise drills on the grid → **miner**, grinders → **grinder**, neither → **shuttle**.
+
+### 2. Blocks on a ship
+
+Only blocks on the PB's own grid count, except cameras: those on subgrids (rotors, pistons) work too. When the ship has several blocks of one kind, tag the ones PAM should use with `[PAM]` in the name. Then only the tagged ones are used.
+
+| Block | Needed | Notes |
+|---|---|---|
+| Programmable block | yes | Runs `PAM_Ship.cs`. Its Custom Data holds the broadcast settings and the `[PAM settings]` section. |
+| Remote control | yes | The drills/grinders must point the way the remote faces (forward) or its down side, otherwise "Wrong remote direction". Several remotes: tag one `[PAM]`. |
+| Drills (miner) / grinders (grinder) | yes | All must face the same way. If some face another way, tag the ones that set the mining direction with `[PAM]`, otherwise "Mining direction is unclear!". |
+| Sensor | grinder only | Tagged `[PAM]`. It must face the same way as the grinders, with its top side the way the remote faces or its bottom side the remote's bottom side ("Wrong sensor direction"). |
+| Connector | yes | The ship's docking connector: the normal connector, not the small one. Several: tag one `[PAM]`. |
+| Gyroscopes, thrusters | yes | "Gyros are missing" / "Thrusters are missing". |
+| Batteries, hydrogen tanks, reactors | for the energy limits | Tag with `[PAM]` to use only those batteries / tanks. |
+| Cargo containers | for cargo | The drill/grinder inventories and connectors that aren't set to Throw Out also count as cargo. |
+| Antenna | for several ships | Broadcasting on and the antenna on. Needed for traffic, co-op mining, station dock control and the controller. |
+| Cameras | for the obstacle brake | Every working camera of the ship is used. Face them the ways the ship flies (forward, plus sideways / up / down for the moves between holes). |
+| Landing gears | for emergency landing | The script switches their auto lock off. Tag `[PAM]` to choose which. |
+| Sorters | for ejection | With **Toggle sorters** on, switched on to eject stone (and ice) and off while mining. Tag `[PAM]` to choose which. |
+| LCD panels | optional | `[PAM]` in the name shows the menu / status. On a cockpit or other block with screens, `[PAM:n]` uses its screen n (1 = first). |
+| Timer blocks | shuttle only | Chosen in the shuttle menu, triggered on docking / before leaving. |
+
+A missing remote, a wrong remote direction or an unclear mining direction stops the ship. The other problems are shown as a status message and keep the job from starting ("Setup error! Can't start").
+
+### 3. Record the path and home
+
+1. Dock the ship at its home connector.
+2. Run `PATHHOME` (or menu **Record path & set home**). The home dock is taken from the connector the ship stands at (locked or ready to lock).
+3. Fly to the job site by hand. A waypoint is recorded every 2 m or more (more spacing at higher speed). Fly the way you want the ship to fly: it follows this path out and back.
+4. Stop the recording on the menu (**Stop path recording**). On the recording page you can keep the old home or the old path instead of the new one.
+
+`PATH` records a new path and keeps the old home. A **shuttle** records from connector 1 to connector 2: the first connector it stands at is connector 1, one more than 5 m away is connector 2.
+
+### 4. Set up and start the job
+
+1. Fly to where the job starts and turn the ship so the drills point into the rock (for a grinder: into the target). The job position and direction are the ship's position and orientation when you start the job.
+2. Menu **Setup mining job** (or `CFGS width height depth`): set the job size, depth mode and start position, see [Menu settings](#menu-settings-job-and-behaviour).
+3. **Start new job!** (or `START`). The ship mines the holes one after the other, flies home when it's full or low on energy, unloads, charges / refuels if needed and flies back.
+4. **Behavior settings** set when it goes home, what it does when the job is done or damaged, ejection and speeds.
+
+`STOP` stops everything, `CONT` continues a stopped job from where the ship is.
+
+### 5. Station and controller (optional)
+
+For a busy base, or to see and command all ships from one place:
+
+1. Put a PB on the station, name it with `[PAM-Controller]` (e.g. `PB [PAM-Controller]`) and paste `PAM_Controller.cs`. Add an antenna with broadcasting on.
+2. LCDs on the station with `[PAM]` in the name show the controller screens. The LCD's Custom Data sets what it shows (`mode=...`, see [Controller screens](#controller-screens)).
+3. Station connectors the ships may use besides their home: add `[PAM-Dock]` to their names (dock pool).
+4. Optional: a sensor named `[PAM-Zone]` sized to the docking area, and a camera named `[PAM-Lane]` within 10 m of each connector, facing out along the approach.
+5. For the ship list, ship menus and commands: on every ship set `Enable_Broadcast=true`, a `Ship_Name` and the same `Broadcast_Channel` as the controller (in the PB's Custom Data, then Recompile).
+
+Traffic, station dock control and co-op mining use their own messages: they need only the antennas, not `Enable_Broadcast`.
+
+### 6. Several ships on one job (co-op)
+
+1. Set up the job on one ship and run `EXPORT` (copies path, home, job and settings to the Custom Data of a block named `[PAM-Data]`).
+2. On each other ship run `IMPORT JOB` (only the job; the ship keeps its own path and home) and then `CONT`.
+3. All ships need the same drill layout. With a controller in range, the controller hands out the holes.
+
+### Multiplayer / dedicated server
+
+The scripts run on the server like any PB script. Each PB's run time is shown in its output and on the controller (see [Controller screens](#controller-screens)); on a server with a PB time limit keep the average well under it. `debugDraw` needs a debug draw mod and is for testing (see [Changes](#changes-from-the-original-131)).
 
 ## Modifications
 
@@ -109,7 +197,7 @@ Edit files in `src/` and rebuild. The modular structure makes it easy to find an
 
 - **Mining behavior:** `15_Navigation.cs` (Mining state)
 - **Flight control:** `19_Flight.cs`, `20_ThrustGyro.cs`
-- **Speed/limits:** `01_Constants.cs`
+- **Settings:** defaults in `01_Constants.cs`, read from Custom Data in `37_Settings.cs`
 - **Menu/UI:** `11_MenuBuilder.cs`
 - **Save/Load format:** `24_Persistence.cs`
 
@@ -122,15 +210,6 @@ python tools/validate_minified.py PAM_Minified.cs
 The minifier only renames identifiers the script itself declares, so game/.NET API names are never renamed, and its output is identical on every run.
 
 To save space it also replaces often-used literals and API calls with short aliases declared at the top of the minified code (`true`/`false`, the connector status values, and small static helpers with the same parameter types for `Vector3.Distance`, `Vector3.Dot`, `Vector3.Normalize`, `Math.Round` and `GridTerminalSystem.GetBlocksOfType`), each only when it saves characters, and writes numbers short (`0.5f` → `.5f`, `2.0f` → `2f`). String literals (menu and status texts) are never changed.
-
-## Which file to paste
-
-The programmable block limit is 100,000 characters, and one script with both the ship logic and the controller logic no longer leaves room for new features. So the build writes two scripts:
-
-- **`PAM_Ship.cs`** for miners, grinders and shuttles
-- **`PAM_Controller.cs`** for the `[PAM-Controller]` PB
-
-Pasting the wrong one is harmless: the PB just says which file it needs. `PAM_Minified.cs` (both modes in one script) no longer fits under the limit and is only kept as a build check.
 
 ## Run arguments
 
@@ -158,63 +237,374 @@ Type them without the brackets:
 | `CFGW forward backward` | Work speed `0.5..10` each. E.g. `CFGW 1.5 2` |
 | `CFGA acceleration` | Acceleration `10..100`. E.g. `CFGA 80` |
 
-## Settings
+## Configuration
 
-The settings are in the **Custom Data of the programmable block**, in the `[PAM settings]` section below the broadcast settings. The script writes the section with the defaults the first time it runs. To change a setting, edit the value there and press **Recompile**. Delete a line to get its default back. The settings stay when you paste a new version of the script, and a new version adds its new settings by itself. A value that can't be read keeps its default and the PB says "Bad setting, default used: <name>". Each script lists only the settings it uses.
+PAM is configured in four places:
+
+| Where | What | How to change |
+|---|---|---|
+| PAM menu on the `[PAM]` LCD | The job (size, depth, start position) and the ship's behaviour (load, energy limits, ejection, speeds) | Run arguments `UP` / `DOWN` / `APPLY`, or the `CFG...` arguments. Saved with the ship's PB. |
+| PB Custom Data, broadcast part | Controller link: on/off, ship name, channel | Edit, then **Recompile** |
+| PB Custom Data, `[PAM settings]` | Tags, speeds, distances, traffic and timing | Edit, then **Recompile** |
+| LCD Custom Data (controller) | What each controller LCD shows, font and size | Edit; read on the next update. See [Controller screens](#controller-screens). |
+
+### Menu settings (job and behaviour)
+
+**Job setup** (miner / grinder, before **Start new job!**). **Change current job** applies new values to the running job.
+
+| Menu line | Default | Values | Meaning |
+|---|---|---|---|
+| Width | 3 | 1 and up (steps of 1 to 20, then larger) | Holes across. The menu shows the width in metres (holes × drill area width). |
+| Height | 3 | 1 and up (steps of 1 to 20, then larger) | Holes up/down. Shown in metres too. |
+| Depth | 30 m | 0 and up (steps of 2 to 50, then larger) | Hole depth. In an Auto depth mode it's the minimum depth. |
+| Depth mode | Default | Default, Auto (Ore), Auto (+Stone) | **Default:** every hole to Depth. **Auto (Ore):** at least Depth, then deeper while the drills still collect ore other than stone; the hole ends when nothing new came in for a while. **Auto (+Stone):** the same, stone counts too (miners only). |
+| Start pos | Top-Left | Top-Left, Center | Where the hole pattern starts. |
+
+**Behavior settings** (miner / grinder)
+
+| Menu line | Default | Values | Meaning |
+|---|---|---|---|
+| Max load | 90 % | 10–95 % | Cargo fill at which the ship counts as full. |
+| Weight limit | On | On / Off | Also full when the ship gets too heavy to fly with `minAccelerationSmall` / `Large`. |
+| Ejection | Off | Off, Cur. pos, Drop pos, In motion; each for Stone or Stone + Ice | When full, eject stone (and ice) and keep mining instead of flying home. **Cur. pos:** stops in the hole and ejects there. **Drop pos:** backs out and ejects over a diagonal neighbour hole (on a planet, mining roughly downwards, job at least 2 × 2), otherwise where it is. **In motion:** backs out and circles slowly over the hole while ejecting. Not for grinders. |
+| Toggle sorters | Off | On / Off | On: PAM switches the sorters on to eject and off while mining. |
+| Unload ice | On | On / Off | Off: the ship doesn't wait for its ice to be unloaded at the base (it keeps it on board). |
+| Uranium | Min 5 kg | Ignore, 1–25 kg | Fly home below this. |
+| Battery | Min 20 % | Ignore, 5–30 % | Fly home below this; charges to full when docked. |
+| Hydrogen | Min 20 % | Ignore, 10–90 % | Fly home below this; fills up when docked. |
+| When done | Return home | Return home / Stop | After the last hole. |
+| On damage | Return home | Return home, Fly to job pos, Stop, Ignore | When the ship is damaged. |
+
+**Advanced** (from Behavior settings)
+
+| Menu line | Default | Values | Meaning |
+|---|---|---|---|
+| Drill / Grinder inv. balancing | On | On / Off | Spread the cargo across the drills/grinders. |
+| Enable drills | Fwd + Bwd | Fwd + Bwd / Fwd | Drills on while backing out of a hole too, or only going in. |
+| Work speed fwd. / bwd. | 1.5 / 2.5 m/s | 0.5–10 m/s | Speed going into / out of a hole. |
+| Acceleration | 70 % | 10–100 % | Share of the thrust used. Above 80 % the menu shows "(risky)". |
+| Width / Height overlap | 0 % | 0–75 % | Overlap between neighbouring holes. Changing it sets the hole spacing again. |
+
+**Shuttle**: undock trigger at each connector (on "Undock" command, player entered cockpit, time delay, ship full / empty, batteries full / below 25 % / empty, hydrogen full / below 25 % / empty), the delay for the time trigger, and a timer block to trigger on docking and before leaving at each connector. Shuttle behaviour has Max load, Unload ice, Uranium, Battery (Ignore / Charge up), Hydrogen (Ignore / Fill up), On damage and Acceleration.
+
+The same values can be set with run arguments (`CFGS`, `CFGB`, `CFGL`, `CFGE`, `CFGW`, `CFGA`, see [Run arguments](#run-arguments)).
+
+### PB Custom Data
+
+The script writes the Custom Data the first time it runs. A ship's looks like this (the controller's has `[PAM-Controller]` in the first line, `Enable_Broadcast=true` and no `Ship_Name`):
+
+```
+[PAM-Ship] Broadcast-settings
+
+Enable_Broadcast=false
+Ship_Name=Your_ship_name_here
+Broadcast_Channel=#default
+
+[PAM settings] edit, then Recompile. Delete a line to get its default. See README.
+pamTag=[PAM]
+controllerTag=[PAM-Controller]
+dataTag=[PAM-Data]
+dockPoolTag=[PAM-Dock]
+dockDist=0.6
+drillRadius=1.4
+minAccelerationSmall=0.2
+minAccelerationLarge=0.1
+setLCDFontAndSize=true
+trafficEnabled=true
+debugDraw=false
+dockRequestDistance=300
+gyroSpeedSmall=15
+...
+```
+
+**Broadcast part** (the original PAM controller link)
+
+| Line | Default | Meaning |
+|---|---|---|
+| first line | `[PAM-Ship] Broadcast-settings` | Must stay as it is. If it doesn't match, the script writes this part again with the defaults ("Reset custom data"). |
+| `Enable_Broadcast` | `false` (ship), `true` (controller) | `true` sends the ship's status to the controller and takes its commands. |
+| `Ship_Name` | `Your_ship_name_here` | Name on the controller. |
+| `Broadcast_Channel` | `#default` | Ships and controller must use the same channel. |
+
+**`[PAM settings]` section**
+
+- Change a value after the `=`, then press **Recompile**. The values are read only when the script starts.
+- Delete a line to get its default back. Lines the script doesn't know are dropped.
+- New versions add their new settings by themselves. Pasting a new script keeps your values.
+- Each script lists only the settings it uses: the ship script doesn't list controller settings and the other way round.
+- Write numbers the way the script wrote the defaults. `true` / `false` for switches.
+- A value that can't be read keeps its default, and the PB shows "Bad setting, default used: <name>".
+- "x ship size" means the setting is multiplied by the ship's size: the diameter of its grid's bounding sphere.
+
+### Settings reference
+
+The **Script** column says which script lists the setting: ship (`PAM_Ship.cs`), controller (`PAM_Controller.cs`) or both.
+
+#### Tags
 
 | Setting | Default | Script | Meaning |
 |---|---|---|---|
-| `pamTag` | `[PAM]` | both | Tag of the PAM PB and its LCDs (`[PAM:<lcdIndex>]`, e.g. `[PAM:1]`) |
-| `controllerTag` | `[PAM-Controller]` | both | Tag that makes a PB the controller |
-| `dataTag` | `[PAM-Data]` | both | Block whose Custom Data EXPORT/IMPORT use |
-| `dockPoolTag` | `[PAM-Dock]` | both | Station connectors ships may use when their home dock is taken |
-| `zoneTag` | `[PAM-Zone]` | controller | Sensor over the docking area: nobody is cleared while another ship moves in it |
-| `laneTag` | `[PAM-Lane]` | controller | Camera at a connector facing out along its approach: the lane must be clear |
-| `dockLaneLength` | 40 | controller | [m] how far the lane cameras check |
-| `dockRequestDistance` | 300 | ship | [m] ships ask for clearance this close to home, then wait outside the zone |
-| `gyroSpeedSmall` / `gyroSpeedLarge` | 15 / 5 | ship | [RPM] gyro speed of small / large ships |
-| `generalSpeedLimit` | 100 | ship | [m/s] 0 = no limit |
-| `dockingSpeed` | 0.5 | ship | [m/s] final approach to the connector |
-| `jobAreaSpeed` | 10 | ship | [m/s] near the job area (between holes, backing out, arriving, leaving) |
-| `dockAreaSpeed` | 5 | ship | [m/s] docking area: inside the `[PAM-Zone]` area, on the way from the path end to the connector, aligning, undocking |
-| `dockDist` | 0.6 | both | x ship size: approach point in front of the home connector |
-| `followPathDock` / `followPathJob` | 2 / 1 | ship | x ship size: stop following the path and fly straight to the dock / job |
-| `useDockDirectionDist` / `useJobDirectionDist` | 1 / 0 | ship | x ship size: use the dock's / job's orientation instead of the waypoint's |
-| `wpReachedDist` | 2 | ship | [m] waypoint reached |
-| `drillRadius` | 1.4 | both | [m] cut radius of grinders and modded drills (vanilla drills use their real radius) |
-| `sensorRange` | 2 | ship | grinding: fly slow when blocks are found in this range |
-| `fastSpeed` | 10 | ship | grinding: speed when no blocks are detected |
-| `minAccelerationSmall` / `minAccelerationLarge` | 0.2 / 0.1 | both | [m/s²] minimum acceleration in space before the ship counts as too heavy |
-| `minEjection` | 25 | ship | [%] minimum ejected cargo to continue the job |
-| `setLCDFontAndSize` | true | both | set font and size of an LCD once, when the script first finds it (change them afterwards as you like) |
-| `obstacleBrake` | true | ship | camera obstacle brake |
-| `obstacleLookAhead` | 3 | ship | [s] scan distance = speed x this + ship size |
-| `obstacleTimeout` | 10 | ship | [s] show "Path blocked" after holding this long |
-| `trafficEnabled` | true | both | traffic between PAM ships (lanes, spacing, right of way, co-op holes) |
-| `laneOffset` | 0.75 | ship | x ship size: keep right of the path; 0 = fly on the path |
-| `followGap` | 1 | ship | x ship size: free space behind a PAM ship ahead |
-| `trafficHullCover` | true | ship | traffic size covers the whole hull: the ship's position is its centre of mass, its size the grid's bounding sphere around the middle of the grid, so on a lopsided ship the offset between the two is added (other ships, the controller and the debug sphere use this size) |
-| `trafficPadding` | 0 | ship | [m] extra space kept around the ship for traffic, on every side |
-| `trafficStuckTime` / `trafficEscapeTime` | 15 / 10 | ship | [s] held by traffic this long, the ship stops waiting and passes on the right for this long |
-| `followTime` | 2 | ship | [s] time a ship takes to close the gap to a PAM ship ahead (lower: follows closer behind, brakes later) |
-| `trafficTimeout` | 5 | ship | [s] forget a PAM ship not heard from for this long (a stopped ship: at least 12 s) |
-| `dockRetries` | 3 | ship | the connector didn't lock this many times: leave it and ask for another one (not for shuttles) |
-| `moveAsideSpeed` | 2 | ship | [m/s] speed while moving aside for a PAM ship coming along its line |
-| `emergencySpeed` | 3 | ship | [m/s] descent speed of an emergency landing in gravity |
-| `laneTurnTime` | 8 | ship | [s] at most this long turning to the connector's direction at the lane entry, then on anyway |
-| `holeStuckTime` | 5 | ship | [s] no progress on the way down to a hole for this long: start the hole here (over it) or go over the hill |
-| `coopWaitHeight` | 2.5 | ship | x ship size: the ring above the job centre where co-op ships wait for a hole |
-| `resumeAfterRestart` | true | ship | continue a running job after a server restart / world load |
-| `debugDraw` | false | both | 3D debug drawing (offline world + DebugAPI mod) |
-| `lcdLineHeight` | 30 | controller | pixels per text line at font size 1.0 (512 px LCD): sets how many lines the main / paged screens fit for each LCD's font size. Bottom line cut off: raise it; a spare line at the bottom: lower it |
-| `tccHorizon` | 8 | controller | [s] how far ahead the controller predicts conflicts between ships |
-| `clearanceTimeout` | 120 | controller | [s] a ship cleared to dock that doesn't finish loses its clearance |
-| `jobShipTimeout` | 600 | controller | [s] a co-op ship not heard from for this long loses its hole |
-| `laneClearTime` | 3 | controller | [s] a lane camera has seen nothing for this long: the connector is usable again |
+| `pamTag` | `[PAM]` | both | Tag of the blocks PAM uses: LCDs (`[PAM:<n>]` for screen n of a block, e.g. `[PAM:1]`), and the remote, connector, drills, sensor, sorters, landing gears, batteries and tanks to use when there are several. On the controller: its LCDs. |
+| `controllerTag` | `[PAM-Controller]` | both | A PB with this in its name is the controller. |
+| `dataTag` | `[PAM-Data]` | both | Block whose Custom Data `EXPORT` / `IMPORT` use. |
+| `dockPoolTag` | `[PAM-Dock]` | both | Station connectors ships may use when their home dock is taken. |
+| `zoneTag` | `[PAM-Zone]` | controller | Sensor over the docking area: nobody is cleared while another ship moves in it. |
+| `laneTag` | `[PAM-Lane]` | controller | Camera at a connector (within 10 m), facing out along its approach: the lane must be clear. |
+
+Tags are matched anywhere in the block name, upper/lower case doesn't matter. If you change a tag, rename the blocks and change it on every ship and the controller the same way.
+
+#### Speeds and flight
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `generalSpeedLimit` | 100 | ship | [m/s] top speed. 0 = no limit. Whole numbers. |
+| `jobAreaSpeed` | 10 | ship | [m/s] near the job area: between holes, backing out, arriving, leaving. |
+| `dockAreaSpeed` | 5 | ship | [m/s] in the docking area: inside the `[PAM-Zone]` area, from the path end to the connector, aligning, undocking. |
+| `dockingSpeed` | 0.5 | ship | [m/s] final approach to the connector. |
+| `gyroSpeedSmall` / `gyroSpeedLarge` | 15 / 5 | ship | [RPM] gyro speed of small / large ships. Whole numbers. |
+| `minAccelerationSmall` / `minAccelerationLarge` | 0.2 / 0.1 | both | [m/s²] minimum acceleration in space; below it the ship counts as too heavy (Weight limit). |
+| `emergencySpeed` | 3 | ship | [m/s] descent speed of an emergency landing in gravity. |
+| `moveAsideSpeed` | 2 | ship | [m/s] speed while moving aside for a PAM ship coming along its line. |
+
+#### Path, job and dock geometry
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `dockDist` | 0.6 | both | x ship size: approach point in front of the connector. The lane entry is one ship size further out. |
+| `followPathDock` / `followPathJob` | 2 / 1 | ship | x ship size: stop following the path this close to the dock / job and fly straight there. |
+| `useDockDirectionDist` / `useJobDirectionDist` | 1 / 0 | ship | x ship size: this close to the dock / job, turn to the dock's / job's orientation instead of the waypoint's. |
+| `wpReachedDist` | 2 | ship | [m] a waypoint counts as reached this close. |
+| `drillRadius` | 1.4 | both | [m] cut radius of grinders and modded drills. Vanilla drills use their real radius (small 1.3 m, large 1.9 m, large Prototech 6 m). |
+| `coopWaitHeight` | 2.5 | ship | x ship size: height of the ring above the job centre where co-op ships wait for a hole. |
+| `holeStuckTime` | 5 | ship | [s] no progress on the way down to a hole for this long (not held by traffic or the cameras): over the hole the ship starts the hole where it is, anywhere else it goes over the hill, one ship size higher. |
+| `laneTurnTime` | 8 | ship | [s] at most this long turning to the docking attitude at the lane entry, then on anyway (weak gyros, heavy cargo). |
+| `dockRetries` | 3 | ship | Connector didn't lock this many times: leave it and ask for another one. Not for shuttles. At least 1. |
+
+#### Grinder
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `sensorRange` | 2 | ship | x ship size: fly slowly while the sensor finds blocks this close. |
+| `fastSpeed` | 10 | ship | [m/s] speed while the sensor finds no blocks. |
+
+#### Cargo
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `minEjection` | 25 | ship | [%] if one ejection removes less than this share of the ore, the ship flies home instead of mining on. |
+
+#### Obstacle brake (cameras)
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `obstacleBrake` | true | ship | Camera obstacle brake on / off. Off: the cameras aren't used. |
+| `obstacleLookAhead` | 3 | ship | [s] scan distance = speed × this + ship size. Larger: brakes earlier, uses more camera charge. |
+| `obstacleTimeout` | 10 | ship | [s] after holding this long the ship shows "Path blocked: <type>" (also on the controller). |
+
+#### Traffic between PAM ships
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `trafficEnabled` | true | both | Traffic between PAM ships: lanes, spacing, right of way, co-op holes. |
+| `laneOffset` | 0.75 | ship | x ship size: keep right of the recorded path. 0 = fly on the path. |
+| `followGap` | 1 | ship | x ship size: free space kept behind a PAM ship ahead. |
+| `followTime` | 2 | ship | [s] time to close the gap to a PAM ship ahead. Lower: follows closer, brakes later. At least 0.1. |
+| `trafficHullCover` | true | ship | Traffic size covers the whole hull. The ship's position is its centre of mass, its size the grid's bounding sphere around the middle of the grid, so on a lopsided ship the offset between the two is added. Other ships, the controller and the debug sphere use this size. |
+| `trafficPadding` | 0 | ship | [m] extra space kept around the ship for traffic, on every side. |
+| `trafficStuckTime` / `trafficEscapeTime` | 15 / 10 | ship | [s] held by traffic this long, the ship stops waiting and passes on the right for this long. It still stops for a ship less than 2 s away. |
+| `trafficTimeout` | 5 | ship | [s] forget a PAM ship not heard from for this long (a stopped ship: at least 12 s). |
+
+#### Station dock control
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `dockRequestDistance` | 300 | ship | [m] ships ask the station for clearance this close to home, then wait outside the zone. |
+| `dockLaneLength` | 40 | controller | [m] how far the `[PAM-Lane]` cameras check. |
+| `clearanceTimeout` | 120 | controller | [s] a ship cleared to dock that hasn't docked or left by then loses its clearance and goes to the back of the queue. |
+| `laneClearTime` | 3 | controller | [s] a lane camera has seen nothing for this long: the connector is usable again. |
+
+#### Controller
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `tccHorizon` | 8 | controller | [s] how far ahead the controller predicts conflicts between ships. Larger: slows ships earlier. |
+| `jobShipTimeout` | 600 | controller | [s] a co-op ship not heard from for this long loses its hole. |
+| `lcdLineHeight` | 30 | controller | Pixels per text line at font size 1.0 (512 px LCD). Sets how many lines the main / paged screens fit for each LCD's font size. Bottom line cut off: raise it; a spare line at the bottom: lower it. |
+
+#### Other
+
+| Setting | Default | Script | Meaning |
+|---|---|---|---|
+| `setLCDFontAndSize` | true | both | Set font and size of an LCD once, when the script first finds it. Change them afterwards as you like. |
+| `resumeAfterRestart` | true | ship | Continue a running job after a server restart / world load. `false`: stay paused like the original. |
+| `debugDraw` | false | both | 3D debug drawing (needs a debug draw mod, see [Changes](#changes-from-the-original-131)). |
+
+### Tuning tips
+
+- **Ships too close / too far apart:** `followGap` and `followTime` (behind each other), `laneOffset` (side by side on the path), `trafficPadding` (all around).
+- **Debug sphere off-centre on a lopsided ship:** keep `trafficHullCover=true`, add `trafficPadding` if parts still stick out.
+- **Ships wait too long for each other:** lower `trafficStuckTime`. **Ships give way too late:** raise `tccHorizon` on the controller.
+- **Docking:** `dockingSpeed` (final approach), `dockDist` (approach point), `laneTurnTime` (turning at the lane), `dockRetries` (tries before another connector).
+- **Ship stuck on terrain over a hole:** lower `holeStuckTime`.
+- **Ship flies home before it is full ("too heavy"):** lower `minAccelerationSmall` / `minAccelerationLarge`, or turn Weight limit off in the menu.
+
+## How it works (flowcharts)
+
+The diagrams use [Mermaid](https://mermaid.js.org/), which GitHub draws on its own. The state names are the `NavState` values in `src/02_Enums.cs`; the menu shows them as text ("Flying to job area", ...).
+
+### One run of the ship script
+
+`Main` runs every 10 game ticks (`Update10`) and when the PB is run with an argument. A "slow tick" is every 10th run (about every 1.7 s).
+
+```mermaid
+flowchart TD
+    A["Main: every 10 ticks, or run with an argument"] --> B{"Exception<br/>on an earlier run?"}
+    B -- "yes, argument RETRY" --> C["Clear the error, rescan,<br/>stop all overrides"]
+    B -- "yes, anything else" --> Z(["Show the error on the LCDs, end the run"])
+    B -- no --> D{"PB named<br/>[PAM-Controller]?"}
+    C --> D
+    D -- yes --> CTRL(["Controller loop, see below"])
+    D -- no --> E["Run argument, then the ship's messages:<br/>at most one controller command per run"]
+    E --> F{"Block scan due?<br/>every 10 s"}
+    F -- yes --> G["Scan, spread over 3 runs:<br/>1 remote, LCDs, sensor, drills / grinders<br/>2 connectors, thrusters, gyros, energy blocks<br/>3 cargo, cameras, dock pool"]
+    F -- no --> H["One update per run, in turn:<br/>cargo, inventory, battery, uranium,<br/>hydrogen, damage, thrust vectors"]
+    G --> I
+    H --> I["Position and speed, path recording,<br/>traffic messages, dock clearance"]
+    I --> J{"Navigation state<br/>Idle?"}
+    J -- no --> K["Navigation state machine<br/>+ job progress"]
+    K --> L["Traffic avoidance:<br/>speed limit or side shift"]
+    L --> M["Obstacle check with the cameras"]
+    M --> N["Flight: thrust overrides"]
+    N --> O["Gyros: orientation"]
+    J -- yes --> P["Align to the planet<br/>if ALIGN was given"]
+    O --> Q["Draw the LCDs"]
+    P --> Q
+    Q --> R["Status message to the controller:<br/>every slow tick while working,<br/>every ~8 s idle, and after a command"]
+```
+
+While the ship is idle, the scan and the updates run only on slow ticks, to keep the run time low.
+
+### Miner / grinder job cycle
+
+```mermaid
+stateDiagram-v2
+    direction TB
+    [*] --> FlyToXY: START, job = where the ship is
+    Undocking --> FlyToJobArea: undocked
+    FlyToJobArea --> FlyToXY: path end reached
+    FlyToXY --> Mining: lined up over the hole
+    FlyToXY --> FlyToPath: job done or no free hole left
+    Mining --> Returning: hole finished
+    Returning --> FlyToXY: backed out, next hole
+    Mining --> ReturnToDock: full or low on energy
+    Mining --> WaitEjection: full, ejection at current position
+    WaitEjection --> Mining: stone ejected
+    Mining --> FlyToDropPos: full, ejection at drop position or in motion
+    FlyToDropPos --> FlyToDropPos2: backed out
+    FlyToDropPos2 --> WaitEjectionDrop: at the drop position
+    WaitEjectionDrop --> FlyToXY: stone ejected
+    WaitEjectionDrop --> FlyToPath: still full or low on energy
+    ReturnToDock --> FlyToPath: backed out of the hole
+    FlyToPath --> FlyToDockArea: on the path
+    FlyToDockArea --> ApproachDock: path end, cleared by the station
+    ApproachDock --> AlignDock: at the approach point
+    AlignDock --> Docking
+    Docking --> Unloading: connector locked
+    Docking --> RetryDocking: no progress
+    RetryDocking --> AlignDock: try again
+    RetryDocking --> FlyToDockArea: dockRetries reached, another connector
+    Unloading --> Charging: battery below full
+    Unloading --> FillHydrogen: tanks below full
+    Unloading --> WaitUranium: uranium below minimum
+    Charging --> Undocking
+    FillHydrogen --> Undocking
+    WaitUranium --> Undocking
+    Unloading --> Undocking: cargo empty, energy ok
+```
+
+- **FlyToXY:** picks the next hole (co-op: one no other ship has), flies over it at least one ship size above the job surface, then straight down. The drills are off on the way.
+- **Mining:** drills on, down at the work speed to the depth (Auto depth: deeper while ore still comes in). If the ship gets stuck it backs up about one ship size and tries again ("Ship stuck! Retrying").
+- **Returning / ReturnToDock:** backs out to one ship size above the job surface, clear of the ships working there.
+- **Unloading:** waits until the cargo is empty (Unload ice off: ice may stay), then charges / refuels to full if a limit is set, then undocks.
+- A job set to **When done: Stop**, or a ship without home, flies to the job position instead of home when the job is done.
+- Emergency landing, moving aside and the camera brake act inside these states and don't change them.
+
+### Docking with a station (`[PAM-Controller]`)
+
+```mermaid
+flowchart TD
+    A["FlyToDockArea: following the path home"] --> B{"Within dockRequestDistance<br/>of home?"}
+    B -- no --> A
+    B -- yes --> C["Ask the station for clearance"]
+    C --> D{"Station answers<br/>within 3 s?"}
+    D -- no --> P{"Home connector free?"}
+    P -- yes --> L
+    P -- no --> Q{"Free [PAM-Dock]<br/>connector it can use?"}
+    Q -- yes --> L
+    Q -- no --> W1["Wait at the path end:<br/>'Waiting for a free dock'"] --> P
+    D -- yes --> E{"Cleared?"}
+    E -- no --> W2["Wait at the zone edge or path end,<br/>in the queue: 'Waiting for dock clearance'"] --> E
+    E -- yes --> L["Fly to the connector's lane entry<br/>(dockDist + 1 ship size out)"]
+    L --> T["Turn to the docking attitude<br/>at most laneTurnTime"]
+    T --> S["Straight in along the lane:<br/>ApproachDock, AlignDock, Docking"]
+    S --> K{"Connector locked?"}
+    K -- yes --> U["Unloading"]
+    K -- no --> R["RetryDocking, try += 1"]
+    R --> X{"tries = dockRetries?"}
+    X -- no --> S
+    X -- yes --> Y["Leave it, the station gives<br/>another connector"] --> E
+```
+
+Station side, every run: one ship at a time is cleared to move in the docking area (emergencies first; ships waiting to undock go first once no ship is docking). A ship on its last leg (turned in its lane, aligning, docking) keeps its clearance and the next ship may come in. The station checks each target connector's lane camera; something in the lane takes the clearance away until the lane has been clear for `laneClearTime`. A cleared ship that hasn't finished after `clearanceTimeout` goes to the back of the queue.
+
+### Traffic decision (each run, per ship, simplified)
+
+```mermaid
+flowchart TD
+    A["Traffic messages from the other PAM ships<br/>(forgotten after trafficTimeout)"] --> B{"trafficEnabled and a<br/>flight state with traffic?"}
+    B -- no --> Z(["No limit"])
+    B -- yes --> C["For each other ship near my way"]
+    C --> D{"Ahead, same way?"}
+    D -- yes --> E["Follow: slow down to keep<br/>followGap, closing in followTime"]
+    D -- no --> F{"Head-on?"}
+    F -- yes --> G["Pass on the right:<br/>steer beside it, slow down"]
+    F -- no --> H{"Paths cross / collision<br/>course from the side?"}
+    H -- yes --> I{"I have right of way?"}
+    I -- yes --> J["Go on"]
+    I -- no --> K["Hold"]
+    H -- no --> J
+    E --> M
+    G --> M
+    J --> M
+    K --> M{"Stopped, and a ship with right of way<br/>comes along my line?"}
+    M -- yes --> N["Move aside at moveAsideSpeed"]
+    M -- no --> O{"Held longer than<br/>trafficStuckTime?"}
+    O -- yes --> P["Pass on the right for<br/>trafficEscapeTime"]
+    O -- no --> Q["Apply the controller's order<br/>if it says give way"]
+    N --> Q
+    P --> Q
+```
+
+The sizes in all checks are the traffic sizes (`trafficHullCover`, `trafficPadding`). While docking, undocking or backing out of a hole the ship only slows down and holds: no stepping aside, no escape. The details and the right-of-way order are in [Multiple ships](#multiple-ships-obstacle-brake-traffic-and-co-op-mining).
+
+### One run of the controller script
+
+```mermaid
+flowchart TD
+    A["Main, controller"] --> B["Run argument (SEND, SENDALL, menu)"]
+    B --> C["All queued ship status messages:<br/>ship list, sorted by name"]
+    C --> D["Block scan, spread over runs:<br/>LCDs, docking area, broadcast"]
+    D --> E["Dock control: clearances, lanes, queue"]
+    E --> F["Job coordination: hand out holes,<br/>drop ships after jobShipTimeout"]
+    F --> G["Traffic control: predict pairs<br/>tccHorizon ahead, who gives way"]
+    G --> H["Staged 'Move home': one ship after the other"]
+    H --> I["Map data, debug drawing (twice a second)"]
+    I --> J["Draw the controller LCDs"]
+```
 
 ## Multiple ships: obstacle brake, traffic and co-op mining
 
-All three are on by default and can be turned off in the settings (see Settings below).
+All three are on by default and can be turned off in the settings (see [Settings reference](#settings-reference)).
 
 - **Docking approach:** the camera sweep also runs on the way from the path end to the connector. Anything right at the approach point (the station around the connector) doesn't count. Blocked there for 4 s, the ship tries to go around: one ship size up, right, left and down from the straight line, one after the other, and from the point beside the obstacle straight to the connector again. If none works it stays where it is ("Docking blocked: <type>, stopped").
 - **Obstacle brake:** the ship uses its own camera blocks to raycast where it's flying (its velocity once it moves, otherwise towards its flight target), and holds position while something is in the way. Each run casts one ray along the centre of the flight line and one to the next of 8 edge points: the four edges of the ship at the scan distance and at half of it, so blocks only the ship's edge would clip are found too. The edge points are at the ship's real outline (its grid box) in that direction, not its bounding sphere, which is much wider than a long ship. Each ray comes from the camera that faces that point best and has charge left. The edge rays look for blocks only; terrain is checked on the centre line, so low paths don't trigger it. A full sweep without a hit releases the hold. Hits on the ship's own subgrids (rotors, pistons) are ignored. The cameras also run while backing out of a hole and undocking (blocks only). PAM ships are left to the traffic rules, except one right in front (centre ray, closer than one ship size): then the ship brakes whatever the traffic rules say. A PAM ship parked at a connector is an obstacle for the cameras (the traffic rules leave it out), except while flying straight into or backing out of the own connector's lane, right beside the ships docked next to it. The info page lists which ship directions the cameras cover; if no camera can look where the ship is going for 2 s, it says "Cameras can't see ahead". It's active during path flights and hole-to-hole moves, and off while mining, backing out of a hole and docking. A camera only scans within 45° of where it faces, so put cameras facing each direction the ship travels: forward, and sideways or up and down for the moves between holes. After `obstacleTimeout` seconds the ship shows "Path blocked: <type>" (also on the controller). Terrain (planet, asteroid) doesn't count on moves between holes (the hole tops sit on the ground), or right at the flight target.
@@ -261,7 +651,7 @@ Behaviour follows the original script (`PAM_ORIGINAL.cs`). Fixes on top of it:
 - **Weight limit on long paths:** the zero-gravity waypoint used by the max-weight calculation is a separate field again (it had been merged with path-following's current waypoint, which affected paths over ~100 waypoints).
 - **Broadcasts:** every queued message is processed each run (one per run fell behind with ~10+ ships); non-text IGC messages on the PAM tag are ignored instead of crashing; `;` in ship names, status or menu text no longer shifts the fields the controller reads.
 - **Saves:** timer block names containing `;`, `&` or line breaks no longer corrupt the saved data (escaped as `%3B` / `%0A` / `%25`). The save format is unchanged, so existing saves still load. `Save()` builds the data with a `StringBuilder`.
-- **Server restart / world load:** the dampeners are switched back on when the script starts. The port assumed they were already on, so a ship saved mid-flight (dampeners off) dropped as soon as its thrust overrides were cleared. A job that was running when the world was saved now resumes automatically. Set `resumeAfterRestart = false` in the settings block to stay paused like the original.
+- **Server restart / world load:** the dampeners are switched back on when the script starts. The port assumed they were already on, so a ship saved mid-flight (dampeners off) dropped as soon as its thrust overrides were cleared. A job that was running when the world was saved now resumes automatically. Set `resumeAfterRestart=false` in the `[PAM settings]` section to stay paused like the original.
 - **Obstacle brake, traffic lanes, spacing, co-op mining and dock pool:** see the section above. Saves now have two more sections at the end (co-op holes, dock pool); older saves still load.
 - **EXPORT / IMPORT:** `EXPORT` copies the path, home dock, job position, mining area and settings into the Custom Data of a block named `[PAM-Data]`; `IMPORT` loads them back (a running job comes back paused). Use it as a backup, or to copy a setup to an identical ship. The game limits Custom Data to 64,000 characters, about 400 waypoints; a bigger export is refused with a message instead of being cut off.
 - **Errors:** after an exception, run the PB with the argument `RETRY` to restart without recompiling.
