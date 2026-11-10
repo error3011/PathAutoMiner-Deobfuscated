@@ -4973,6 +4973,10 @@ void ControllerMainLoop(string argument)
             shipsChanged = true;
         }
     }
+    // a ship script not heard from for 2 minutes (its PB rebuilt or gone, ship destroyed): off the list,
+    // it comes back with its next message
+    connectedShips.RemoveAll(q => (TimeNow() - q.lastMessageTime).TotalSeconds > 120);
+    if (selectedShip != null && !connectedShips.Contains(selectedShip)) selectedShip = null;
     if (shipsChanged)
         connectedShips.Sort(delegate (ShipInfo a, ShipInfo b)
         {
@@ -8126,7 +8130,9 @@ String BuildFleetScreen()
             JobRec job = jobs.Find(q => q.key == t.job);
             hole = ("" + (job != null ? job.order.IndexOf(t.hole) + 1 : t.hole + 1)).PadLeft(3);
         }
-        text += Pad(s.name, nw - 1) + " " + Pad(s.IsTimedOut() ? "NO CONTACT" : ShortState(t != null && t.nav >= 0 ? GetNavStateName((NavState)t.nav) : s.stateText), 14) + " " +
+        // two ship scripts with the same name: the end of each one's PB id tells them apart
+        String nm = connectedShips.Count(q => q.name == s.name) > 1 ? s.name + " #" + s.id.Substring(Math.Max(0, s.id.Length - 4)) : s.name;
+        text += Pad(nm, nw - 1) + " " + Pad(s.IsTimedOut() ? "NO CONTACT" : ShortState(t != null && t.nav >= 0 ? GetNavStateName((NavState)t.nav) : s.stateText), 14) + " " +
             Pct((int)(SafeDiv(s.currentVolume, s.maxVolume) * 100)) + " " + Pct(t != null ? t.bat : -1) + " " + Pct(t != null ? t.h2 : -1) + " " + hole + " " + (t != null && t.ms >= 0 ? t.ms.ToString("0.00") : "   -").PadLeft(5) + "  " + ShipFlags(t) + "\n";
     }
     return text;

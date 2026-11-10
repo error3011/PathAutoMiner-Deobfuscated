@@ -27,6 +27,10 @@ void ControllerMainLoop(string argument)
             shipsChanged = true;
         }
     }
+    // a ship script not heard from for 2 minutes (its PB rebuilt or gone, ship destroyed): off the list,
+    // it comes back with its next message
+    connectedShips.RemoveAll(q => (TimeNow() - q.lastMessageTime).TotalSeconds > 120);
+    if (selectedShip != null && !connectedShips.Contains(selectedShip)) selectedShip = null;
     if (shipsChanged)
         connectedShips.Sort(delegate (ShipInfo a, ShipInfo b)
         {
