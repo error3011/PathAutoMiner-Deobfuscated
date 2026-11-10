@@ -10,6 +10,7 @@ The original script is published as a single minified/obfuscated file. This proj
 - [Which file to paste](#which-file-to-paste)
 - [Setup in Space Engineers](#setup-in-space-engineers)
 - [Run arguments](#run-arguments)
+- [Updating the ships' script (PamUpdater mod)](#updating-the-ships-script-pamupdater-mod)
 - [Configuration](#configuration): [menu](#menu-settings-job-and-behaviour), [Custom Data](#pb-custom-data), [settings reference](#settings-reference), [tuning tips](#tuning-tips)
 - [How it works (flowcharts)](#how-it-works-flowcharts)
 - [Multiple ships: obstacle brake, traffic and co-op mining](#multiple-ships-obstacle-brake-traffic-and-co-op-mining)
@@ -236,6 +237,18 @@ Type them without the brackets:
 | `CFGE minUr minBat minHyd` | Minimum uranium `1..25`, battery `5..30`, hydrogen `10..90`, or `IG` to ignore. E.g. `CFGE 20 10 IG` |
 | `CFGW forward backward` | Work speed `0.5..10` each. E.g. `CFGW 1.5 2` |
 | `CFGA acceleration` | Acceleration `10..100`. E.g. `CFGA 80` |
+
+Controller arguments: `UP` / `DOWN` / `APPLY` (menu), `CLEAR` (clear the ship list), `SEND ship:cmd` (one ship), `SENDALL cmd` (all ships), `UPDATE` (update the ships' script, see below).
+
+## Updating the ships' script (PamUpdater mod)
+
+A programmable block script can't change another PB's code, so pasting a new `PAM_Ship.cs` into every miner by hand is the default. The small **PamUpdater** mod (in `PamUpdater/`, a server-side script mod) does it for you:
+
+1. On the station, place a PB named `[PAM-Ship-Master]` (e.g. `PB [PAM-Ship-Master]`), **switch it off** (otherwise it runs PAM itself and takes over the station's `[PAM]` LCDs) and paste the new `PAM_Ship.cs` into it. Optionally the same with `[PAM-Controller-Master]` and `PAM_Controller.cs`.
+2. Either type `/pamupdate` in chat (ships and controllers), or use **Send command to all → [Update scripts]** on the controller / its `UPDATE` argument (ships only).
+3. The mod copies the master's code to every PB **you own** that already runs PAM (ship PBs: not named `[PAM-Controller]`; controllers: named `[PAM-Controller]`) and recompiles them on the server, one per second. PBs with other scripts, other players' PBs and PBs that are already up to date aren't touched. Chat shows how many were updated and any that had compile errors.
+
+Job data is kept: before recompiling, the game runs the old script's `Save()` and hands its saved data to the new script, so path, home, job and progress carry over. Custom Data settings aren't touched. Each player can only update their own PBs, admins included.
 
 ## Configuration
 

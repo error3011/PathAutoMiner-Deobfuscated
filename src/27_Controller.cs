@@ -201,6 +201,7 @@ void ProcessControllerArgument(string argument)
     switch (cmd)
     {
         case "CLEAR": ClearShipList(); return;
+        case "UPDATE": UpdateShipScripts(); return;
         case "SENDALL":
             if (String.IsNullOrEmpty(arg1)) { statusMessage = "Usage: SENDALL <cmd>"; return; }
             SendCommandToShip(null, arg1); return;
@@ -252,9 +253,9 @@ void UpdateControllerDisplays()
 {
     String echoText = "[PAM]-Controller\n\n" + "Run-arguments: (Type without:[ ])\n" + "———————————————\n" +
         "[UP] Menu navigation up\n" + "[DOWN] Menu navigation down\n" + "[APPLY] Apply menu point\n" +
-        "[CLEAR] Clear miner list\n" + "[SEND ship:cmd] Send to a ship*\n" + "[SENDALL cmd] Send to all ships*\n" +
+        "[CLEAR] Clear miner list\n" + "[UPDATE] Update ships' script**\n" + "[SEND ship:cmd] Send to a ship*\n" + "[SENDALL cmd] Send to all ships*\n" +
         "———————————————\n\n" + "*[SEND] = Cmd to one ship:\n" + " e.g.: \"SEND Miner 1:homepos\"\n\n" +
-        "*[SENDALL] = Cmd to all ships:\n" + " e.g.: \"SENDALL homepos\"\n\n";
+        "*[SENDALL] = Cmd to all ships:\n" + " e.g.: \"SENDALL homepos\"\n" + "**PamUpdater mod, PB [PAM-Ship-Master]\n\n";
 
     for (int i = 0; i < textSurfaces.Count; i++)
         DrawTextScreen(textSurfaces[i], BuildControllerScreenForMode(LCDMode.MainCompact, "0", false, LinesFor(textSurfaces[i])), LCDMode.MainCompact, LinesFor(textSurfaces[i]));
@@ -360,6 +361,7 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
         if (AddMenuItem(ref text, sel, idx++, applyAction, " [Move home] " + GetCommandStatusText(target, "HOMEPOS"))) { SendCommandToShip(target, "HOMEPOS"); }
         if (AddMenuItem(ref text, sel, idx++, applyAction, " [Move to job] " + GetCommandStatusText(target, "JOBPOS"))) { SendCommandToShip(target, "JOBPOS"); }
         if (AddMenuItem(ref text, sel, idx++, applyAction, " [Full simulation] " + GetCommandStatusText(target, "FULL"))) { SendCommandToShip(target, "FULL"); }
+        if (target == null && AddMenuItem(ref text, sel, idx++, applyAction, " [Update scripts]")) UpdateShipScripts();
         if (target != null && target.shipMode == ShipMode.Shuttle)
             if (AddMenuItem(ref text, sel, idx++, applyAction, " [Undock] " + GetCommandStatusText(target, "UNDOCK"))) { SendCommandToShip(target, "UNDOCK"); }
         text += GetCmdResultLines(target);
@@ -384,6 +386,15 @@ String BuildControllerScreen(bool applyAction, int pageOffset, ref int scrollSta
 
     if (!menuJustNavigated) menuIndex = Math.Min(menuItemCount - 1, menuIndex);
     return text;
+}
+
+// PamUpdater mod: copies the code of your PB named [PAM-Ship-Master] to all your PBs running PAM's ship
+// script (on the server, one per second); job data is kept (the game saves before recompiling)
+void UpdateShipScripts()
+{
+    ITerminalProperty p = Me.GetProperty("PamUpdate");
+    Func<IMyTerminalBlock, String> f = p == null ? null : p.As<Func<IMyTerminalBlock, String>>().GetValue(Me);
+    AddLog(statusMessage = f == null ? "Update: PamUpdater mod not loaded" : f(Me));
 }
 
 String GetShipStatusLine(ShipInfo ship)
