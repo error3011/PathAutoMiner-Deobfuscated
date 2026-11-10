@@ -554,8 +554,16 @@ void SetHoleDone(int cell, bool done)
     doneHoles = new String(h);
 }
 
-// Another ship on this job has this hole. keeping: the hole is already ours, so only a ship with a
-// lower id makes us give it up (both claimed it at once).
+// Ships at holes a and b (cells, row * w + col) would touch: their footprints across the drill face
+// (fw x fh, the grid's box) overlap when centred on the holes (tw x th apart per hole). A ship no
+// bigger than the area it drills can work right beside another one.
+static bool HolesTouch(int a, int b, int w, float tw, float th, float fw1, float fh1, float fw2, float fh2)
+{
+    return a == b || w > 0 && Math.Abs(a % w - b % w) * tw < (fw1 + fw2) / 2 && Math.Abs(a / w - b / w) * th < (fh1 + fh2) / 2;
+}
+
+// Another ship on this job has this hole, or one so close that the two hulls would touch. keeping: the
+// hole is already ours, so only a ship with a lower id makes us give it up (both claimed at once).
 bool HoleConflict(int cell, bool keeping)
 {
     if (!trafficEnabled) return false;
@@ -564,7 +572,7 @@ bool HoleConflict(int cell, bool keeping)
     {
         TrafficShip t = traffic[i];
         if (t.job != key || t.hole < 0 || (keeping && t.id > myGridId)) continue;
-        if (t.hole == cell) return true;
+        if (HolesTouch(t.hole, cell, jobWidth, JTW(), JTH(), shipFootWidth, shipFootHeight, t.fw, t.fh)) return true;
     }
     return false;
 }

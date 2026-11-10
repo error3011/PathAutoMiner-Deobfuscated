@@ -4040,8 +4040,8 @@ void CalculateToolDimensions()
     toolWidth = (maxX - minX) * (1 - widthOverlap) + radius * 2;
     toolHeight = (down ? maxZ - minZ : maxY - minY) * (1 - heightOverlap) + radius * 2;
 
-    // ship footprint across the drill face (same axes as the hole grid): co-op skips a
-    // neighbouring hole only when the ship is wider than the area it drills
+    // ship footprint across the drill face (same axes as the hole grid): co-op ships don't take holes
+    // where their hulls would touch (HolesTouch), so a ship wider than the area it drills skips neighbours
     IMyCubeGrid g = remoteControl.CubeGrid;
     float x0 = 0, x1 = 0, y0 = 0, y1 = 0;
     for (int c = 0; c < 8; c++)
@@ -6349,8 +6349,16 @@ void SetHoleDone(int cell, bool done)
     doneHoles = new String(h);
 }
 
-// Another ship on this job has this hole. keeping: the hole is already ours, so only a ship with a
-// lower id makes us give it up (both claimed it at once).
+// Ships at holes a and b (cells, row * w + col) would touch: their footprints across the drill face
+// (fw x fh, the grid's box) overlap when centred on the holes (tw x th apart per hole). A ship no
+// bigger than the area it drills can work right beside another one.
+static bool HolesTouch(int a, int b, int w, float tw, float th, float fw1, float fh1, float fw2, float fh2)
+{
+    return a == b || w > 0 && Math.Abs(a % w - b % w) * tw < (fw1 + fw2) / 2 && Math.Abs(a / w - b / w) * th < (fh1 + fh2) / 2;
+}
+
+// Another ship on this job has this hole, or one so close that the two hulls would touch. keeping: the
+// hole is already ours, so only a ship with a lower id makes us give it up (both claimed at once).
 bool HoleConflict(int cell, bool keeping)
 {
     if (!trafficEnabled) return false;
@@ -6359,7 +6367,7 @@ bool HoleConflict(int cell, bool keeping)
     {
         TrafficShip t = traffic[i];
         if (t.job != key || t.hole < 0 || (keeping && t.id > myGridId)) continue;
-        if (t.hole == cell) return true;
+        if (HolesTouch(t.hole, cell, jobWidth, JTW(), JTH(), shipFootWidth, shipFootHeight, t.fw, t.fh)) return true;
     }
     return false;
 }
@@ -7317,7 +7325,7 @@ void HandleJobTraffic(String data)
     // the ship's own claim (picked without the controller, or after a controller restart): keep it
     // unless another ship already has that hole
     int hole = int.Parse(f[5]);
-    if (hole >= 0 && hole < job.done.Length && (s.cell < 0 || job.done[s.cell] == '1') && job.done[hole] != '1' && HoleOwner(job, hole, s) == null)
+    if (hole >= 0 && hole < job.done.Length && (s.cell < 0 || job.done[s.cell] == '1') && job.done[hole] != '1' && !HoleBlocked(job, hole, s))
         s.cell = hole;
 }
 
@@ -7332,12 +7340,20 @@ JobShip HoleOwner(JobRec job, int cell, JobShip except)
     return null;
 }
 
+// another ship has this hole, or one so close that their hulls would touch (HolesTouch)
+bool HoleBlocked(JobRec job, int cell, JobShip s)
+{
+    foreach (JobShip o in job.ships)
+        if (o != s && o.cell >= 0 && o.cell < job.done.Length && job.done[o.cell] != '1' && HolesTouch(o.cell, cell, job.w, job.tw, job.th, s.fw, s.fh, o.fw, o.fh)) return true;
+    return false;
+}
+
 int NextFreeHole(JobRec job, JobShip s)
 {
     for (int k = 0; k < job.order.Count; k++)
     {
         int c = job.order[k];
-        if (job.done[c] != '1' && HoleOwner(job, c, s) == null) return c;
+        if (job.done[c] != '1' && !HoleBlocked(job, c, s)) return c;
     }
     return -2;
 }

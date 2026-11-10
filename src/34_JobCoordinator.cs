@@ -138,7 +138,7 @@ void HandleJobTraffic(String data)
     // the ship's own claim (picked without the controller, or after a controller restart): keep it
     // unless another ship already has that hole
     int hole = int.Parse(f[5]);
-    if (hole >= 0 && hole < job.done.Length && (s.cell < 0 || job.done[s.cell] == '1') && job.done[hole] != '1' && HoleOwner(job, hole, s) == null)
+    if (hole >= 0 && hole < job.done.Length && (s.cell < 0 || job.done[s.cell] == '1') && job.done[hole] != '1' && !HoleBlocked(job, hole, s))
         s.cell = hole;
 }
 
@@ -153,12 +153,20 @@ JobShip HoleOwner(JobRec job, int cell, JobShip except)
     return null;
 }
 
+// another ship has this hole, or one so close that their hulls would touch (HolesTouch)
+bool HoleBlocked(JobRec job, int cell, JobShip s)
+{
+    foreach (JobShip o in job.ships)
+        if (o != s && o.cell >= 0 && o.cell < job.done.Length && job.done[o.cell] != '1' && HolesTouch(o.cell, cell, job.w, job.tw, job.th, s.fw, s.fh, o.fw, o.fh)) return true;
+    return false;
+}
+
 int NextFreeHole(JobRec job, JobShip s)
 {
     for (int k = 0; k < job.order.Count; k++)
     {
         int c = job.order[k];
-        if (job.done[c] != '1' && HoleOwner(job, c, s) == null) return c;
+        if (job.done[c] != '1' && !HoleBlocked(job, c, s)) return c;
     }
     return -2;
 }

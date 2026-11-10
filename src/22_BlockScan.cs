@@ -164,8 +164,8 @@ void CalculateToolDimensions()
     toolWidth = (maxX - minX) * (1 - widthOverlap) + radius * 2;
     toolHeight = (down ? maxZ - minZ : maxY - minY) * (1 - heightOverlap) + radius * 2;
 
-    // ship footprint across the drill face (same axes as the hole grid): co-op skips a
-    // neighbouring hole only when the ship is wider than the area it drills
+    // ship footprint across the drill face (same axes as the hole grid): co-op ships don't take holes
+    // where their hulls would touch (HolesTouch), so a ship wider than the area it drills skips neighbours
     IMyCubeGrid g = remoteControl.CubeGrid;
     float x0 = 0, x1 = 0, y0 = 0, y1 = 0;
     for (int c = 0; c < 8; c++)
