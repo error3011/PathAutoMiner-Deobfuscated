@@ -5837,6 +5837,7 @@ Vector3 trafficShift = new Vector3();
 float trafficSpeedLimit = -1; // -1 = no limit
 Vector3 trafficHeading = new Vector3();
 bool trafficHolding = false;
+bool trafficEscaping = false; // held too long, passing on the right: the controller's order doesn't stop that
 DateTime trafficHoldSince = TimeNow();
 // trafficStuckTime / trafficEscapeTime (settings): held by traffic this long -> stop waiting and pass on the right, for this long
 int trafficTick = 0;
@@ -6124,7 +6125,7 @@ void ParseTrafficControl(String data)
 // on top of the ship's own avoidance, after its 15 s escape: the controller sees all ships
 void ApplyTrafficControl()
 {
-    if (tccLimit < 0 || (TimeNow() - tccTime).TotalSeconds > 1.5 || sidestep) return; // moving aside resolves it
+    if (tccLimit < 0 || (TimeNow() - tccTime).TotalSeconds > 1.5 || sidestep || trafficEscaping) return; // moving aside / passing resolves it
     trafficSpeedLimit = trafficSpeedLimit < 0 ? tccLimit : Math.Min(trafficSpeedLimit, tccLimit);
     if (tccLimit < 0.5f) statusMessage = "Traffic: giving way (controller)";
 }
@@ -6194,6 +6195,10 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
                     }
                     continue;
                 }
+                // at the job site (both moving between holes / arriving): the one closer to its hole goes
+                // first; a ship farther from its hole that has stopped for me is passed, not followed
+                if (sameJob && myPrio == 1 && other.prio == 1 && other.vel.LengthSquared() < 1 && GoesFirst(myDest, other))
+                { trafficShift = PassRight(dir, right, clear, along); continue; }
                 if (hasHeading && GoesFirst(myDest, other))
                 {
                     // does the other ship have me ahead in its corridor too (crossing paths)? then one
@@ -6254,11 +6259,12 @@ void ComputeTrafficAvoidance(Vector3 gravity, bool precise = false)
     // safety net: held by traffic for too long -> stop waiting for a while and pass on the right
     // (not while docking or in a hole, and not in the queue outside the docking area)
     bool held = trafficSpeedLimit >= 0 && trafficSpeedLimit < 0.5f;
+    trafficEscaping = false;
     if (!held || precise || (limiter != null && limiter.queued && goingHome)) { trafficHolding = false; return; }
     if (!trafficHolding) { trafficHolding = true; trafficHoldSince = TimeNow(); }
     double heldFor = (TimeNow() - trafficHoldSince).TotalSeconds;
     if (heldFor > trafficStuckTime + trafficEscapeTime) trafficHoldSince = TimeNow();
-    else if (heldFor > trafficStuckTime) { float td = TrafficDiameter(); trafficSpeedLimit = cpaClose ? 0 : -1; trafficShift = PassRight(dir, right, td, td * 4); statusMessage = "Traffic: passing a stuck ship"; }
+    else if (heldFor > trafficStuckTime) { trafficEscaping = true; float td = TrafficDiameter(); trafficSpeedLimit = cpaClose ? 0 : -1; trafficShift = PassRight(dir, right, td, td * 4); statusMessage = "Traffic: passing a stuck ship"; }
 }
 
 void Limit(float v, TrafficShip o, ref TrafficShip limiter) { if (trafficSpeedLimit < 0 || v < trafficSpeedLimit) { trafficSpeedLimit = v; limiter = o; } }
@@ -7512,10 +7518,13 @@ void ComputeTrafficControl()
                 if ((tcPairs[k].a == a.id && tcPairs[k].b == b.id) || (tcPairs[k].a == b.id && tcPairs[k].b == a.id)) p = tcPairs[k];
             int sig = a.id < b.id ? a.prio * 8 + b.prio : b.prio * 8 + a.prio;
             if (p == null) { p = new TCPair(); p.a = a.id; p.b = b.id; p.sig = sig + 1; tcPairs.Add(p); }
-            if (p.sig != sig)
+            // at the job site (both moving between holes / arriving): always the one closer to its hole
+            // goes first, decided again every run, so ships can't end up waiting for each other in a circle
+            bool site = a.prio == 1 && b.prio == 1 && a.metric >= 0 && b.metric >= 0;
+            if (p.sig != sig || site)
             {
                 long was = p.yielder;
-                p.sig = sig; p.yielder = TCYielder(a, b, ua, ub, rel, dist);
+                p.sig = sig; p.yielder = site ? (a.metric > b.metric || a.metric == b.metric && a.id > b.id ? a.id : b.id) : TCYielder(a, b, ua, ub, rel, dist);
                 if (p.yielder != was) AddLog("Traffic: " + (p.yielder == a.id ? TCName(a) + " gives way to " + TCName(b) : TCName(b) + " gives way to " + TCName(a)));
             }
             p.last = TimeNow();

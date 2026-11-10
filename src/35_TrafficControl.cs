@@ -132,10 +132,13 @@ void ComputeTrafficControl()
                 if ((tcPairs[k].a == a.id && tcPairs[k].b == b.id) || (tcPairs[k].a == b.id && tcPairs[k].b == a.id)) p = tcPairs[k];
             int sig = a.id < b.id ? a.prio * 8 + b.prio : b.prio * 8 + a.prio;
             if (p == null) { p = new TCPair(); p.a = a.id; p.b = b.id; p.sig = sig + 1; tcPairs.Add(p); }
-            if (p.sig != sig)
+            // at the job site (both moving between holes / arriving): always the one closer to its hole
+            // goes first, decided again every run, so ships can't end up waiting for each other in a circle
+            bool site = a.prio == 1 && b.prio == 1 && a.metric >= 0 && b.metric >= 0;
+            if (p.sig != sig || site)
             {
                 long was = p.yielder;
-                p.sig = sig; p.yielder = TCYielder(a, b, ua, ub, rel, dist);
+                p.sig = sig; p.yielder = site ? (a.metric > b.metric || a.metric == b.metric && a.id > b.id ? a.id : b.id) : TCYielder(a, b, ua, ub, rel, dist);
                 if (p.yielder != was) AddLog("Traffic: " + (p.yielder == a.id ? TCName(a) + " gives way to " + TCName(b) : TCName(b) + " gives way to " + TCName(a)));
             }
             p.last = TimeNow();
